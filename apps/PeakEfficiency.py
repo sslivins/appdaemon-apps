@@ -1,29 +1,37 @@
 from datetime import time
 import hassapi as hass
 
+DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
+DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
+DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
+
 class PeakEfficiency(hass.Hass):
 
     def initialize(self):
-        self.restore_temp = self.safe_get_float("input_number.away_mode_target_temperature", 13)
-        self.heat_to_temp = self.safe_get_float("input_number.away_mode_peak_heat_to_tempearture", 19.5)
-        self.heat_duration = 20 * 60  # 20 minutes
+        self.restore_temp = self.safe_get_float("input_number.away_mode_target_temperature", DEFAULT_AWAY_MODE_TEMP)
+        self.heat_to_temp = self.safe_get_float("input_number.away_mode_peak_heat_to_tempearture", DEFAULT_PEAK_HEAT_TEMP)
 
-        self.full_entity_list = [
-            "climate.main_floor",
-            "climate.master_bedroom",
-            "climate.basement_master",
-            "climate.basement_bunk_rooms",
-            "climate.ski_room"
-        ]
+        # Define custom heating durations for each zone (in seconds)
+        self.heat_durations = {
+            "climate.main_floor": 40 * 60,
+            "climate.master_bedroom": 20 * 60,
+            "climate.basement_master": 20 * 60,
+            "climate.basement_bunk_rooms": 30 * 60,
+            "climate.ski_room": 10 * 60
+        }
+
+        self.full_entity_list = list(self.heat_durations.keys())
         self.active_queue = []  # Will store entities to run
 
         # Optional trigger
         self.listen_state(self.start_override, "input_boolean.start_peak_efficiency", new="on")
 
         # Run daily at 3:00 PM
-        self.run_daily(self.start_override, time(15, 0, 0))
+        run_at = time(15, 0, 0)  # 3:00 PM
+        self.run_daily(self.start_override, run_at)
 
-        self.log("PeakEfficiency initialized")
+        run_at_am_pm = run_at.strftime("%I:%M %p")
+        self.log(f"PeakEfficiency initialized, will run daily at {run_at_am_pm}.")
 
     def safe_get_float(self, entity_id, default):
         try:
@@ -49,7 +57,8 @@ class PeakEfficiency(hass.Hass):
             return
 
         climate = self.active_queue.pop(0)
-        self.log(f"Overriding {climate} to {self.heat_to_temp}C for {self.heat_duration // 60} minutes.")
+        heat_duration = self.heat_durations.get(climate, DEFAULT_HEATING_DURATION)  # Default to 20 minutes if not specified
+        self.log(f"Overriding {climate} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
 
         do_dry_run = self.get_state("input_boolean.peak_efficiency_dry_run") == "on"
         if not do_dry_run:
@@ -61,7 +70,7 @@ class PeakEfficiency(hass.Hass):
         current_temp = self.get_state(climate, attribute="current_temperature")
 
         # Schedule restore after heat_duration
-        self.run_in(self.restore_temperature, self.heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
+        self.run_in(self.restore_temperature, heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
 
     def restore_temperature(self, kwargs):
         climate = kwargs["climate"]
