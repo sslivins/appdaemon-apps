@@ -70,7 +70,7 @@ class PeakEfficiency(hass.Hass):
         current = self.get_state(climate, attribute="current_temperature")
         do_dry_run = self.get_state("input_boolean.peak_efficiency_dry_run") == "on"
         if not do_dry_run: 
-            self.call_service("climate.set_temperature", entity_id=climate, temperature=self.restore_temp)
+            self.call_service("climate/set_temperature", entity_id=climate, temperature=self.restore_temp)
         else:
             self.log(f"{climate}: Not modifying temperature as Dry Run mode is enabled")
 
