@@ -168,13 +168,13 @@ class PeakEfficiency(hass.Hass):
         """
         current_value = self.get_state(CLIMATE_STATE)
         if current_value != "":
-            raise ValueError(f"Cannot save state to {CLIMATE_STATE}: it is not empty.")
+            raise ValueError(f"Cannot save state to {{CLIMATE_STATE}}: it is not empty, got {current_value}")
         
         try:
             self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value=state.to_json())
-            self.log(f"State saved to {CLIMATE_STATE}: {state}", level="DEBUG")
+            self.log(f"State saved to {{CLIMATE_STATE}}: {state}", level="DEBUG")
         except Exception as e:
-            self.error(f"Failed to save state to {CLIMATE_STATE}: {e}")
+            self.error(f"Failed to save state to {{CLIMATE_STATE}}: {e}")
             raise
 
     def get_climate_state(self, clear_after_reading=True) -> ClimateState:
@@ -184,15 +184,15 @@ class PeakEfficiency(hass.Hass):
         try:
             raw_state = self.get_state(CLIMATE_STATE)
             if not raw_state:
-                raise ValueError(f"State in {CLIMATE_STATE} is empty or unavailable.")
+                raise ValueError(f"State in {{CLIMATE_STATE}} is empty or unavailable.")
             if clear_after_reading:
                 self.clear_climate_state()
             return ClimateState.from_json(raw_state)
         except json.JSONDecodeError as e:
-            self.error(f"Failed to decode state from {CLIMATE_STATE}: {e}")
+            self.error(f"Failed to decode state from {{CLIMATE_STATE}}: {e}")
             raise
         except Exception as e:
-            self.error(f"Unexpected error while retrieving state from {CLIMATE_STATE}: {e}")
+            self.error(f"Unexpected error while retrieving state from {{CLIMATE_STATE}}: {e}")
             raise
 
     def clear_climate_state(self):
@@ -201,9 +201,9 @@ class PeakEfficiency(hass.Hass):
         """
         try:
             self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value="")
-            self.log(f"State cleared for {CLIMATE_STATE}", level="DEBUG")
+            self.log(f"State cleared for {{CLIMATE_STATE}}", level="DEBUG")
         except Exception as e:
-            self.error(f"Failed to clear state for {CLIMATE_STATE}: {e}")
+            self.error(f"Failed to clear state for {{CLIMATE_STATE}}: {e}")
             raise        
         
     def terminate(self):
