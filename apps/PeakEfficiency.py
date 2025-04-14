@@ -285,9 +285,11 @@ class PeakEfficiency(hass.Hass):
         max_sum = float('-inf')
         best_start_time = None
 
-        # forecast is list of tuples: (time, temp)
+        # forecast is list of tuples: (time, temp, humidity, radiation)
+        # we only need the first two elements of each tuple
+        forecast_temp = [(datetime.fromisoformat(t), temp) for t, temp, _, _ in forecast]
         for i in range(len(forecast) - block_size + 1):
-            window = forecast[i:i + block_size]
+            window = forecast_temp[i:i + block_size]
             temp_sum = sum(temp for _, temp in window)
 
             if temp_sum > max_sum:
