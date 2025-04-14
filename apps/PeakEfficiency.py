@@ -105,7 +105,9 @@ class PeakEfficiency(hass.Hass):
             #get total run time of heat_durations
             total_run_time = sum(self.heat_durations.values())
             
-            best_start_time, _ =self.warmest_hours(forecast, total_run_time)
+            best_start_time, _ = self.warmest_hours(forecast, total_run_time)
+            
+            self.log(f"Best start time based on weather forecast is: {best_start_time}", level="INFO")
             
             run_at = best_start_time.time() if best_start_time else run_at
                         
