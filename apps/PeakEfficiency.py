@@ -167,12 +167,12 @@ class PeakEfficiency(hass.Hass):
         Raises an error if the input_text entity is not empty.
         """
         current_value = self.get_state(CLIMATE_STATE)
-        if current_value:
+        if current_value != "":
             raise ValueError(f"Cannot save state to {CLIMATE_STATE}: it is not empty.")
         
         try:
             self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value=state.to_json())
-            self.log(f"State saved to {CLIMATE_STATE}: {state}")
+            self.log(f"State saved to {CLIMATE_STATE}: {state}", level="DEBUG")
         except Exception as e:
             self.error(f"Failed to save state to {CLIMATE_STATE}: {e}")
             raise
@@ -201,7 +201,7 @@ class PeakEfficiency(hass.Hass):
         """
         try:
             self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value="")
-            self.log(f"State cleared for {CLIMATE_STATE}")
+            self.log(f"State cleared for {CLIMATE_STATE}", level="DEBUG")
         except Exception as e:
             self.error(f"Failed to clear state for {CLIMATE_STATE}: {e}")
             raise        
