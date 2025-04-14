@@ -68,9 +68,6 @@ class PeakEfficiency(hass.Hass):
         # Optional trigger
         self.listen_state(self.start_override, MANUAL_START, new="on")
 
-        run_at = time(15, 0, 0)  # 3:00 PM
-        self.run_daily(self.start_override, run_at)
-        
         #check if timer is running which means we are in the middle of a run
         timer_state = self.get_state(RESTORE_TEMPERATURE_TIMER)
         if timer_state == "active":
@@ -96,6 +93,9 @@ class PeakEfficiency(hass.Hass):
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
         self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
         
+        #default start time is 3pm
+        run_at = time(15, 0, 0)   
+        
         lat = self.args.get("latitude")
         lon = self.args.get("longitude")
 
@@ -107,8 +107,10 @@ class PeakEfficiency(hass.Hass):
             
             best_start_time, _ =self.warmest_hours(forecast, total_run_time)
             
-            self.log(f"Best start time for peak efficiency is {best_start_time}.")
-            
+            run_at = best_start_time.time() if best_start_time else run_at
+                        
+
+        self.run_daily(self.start_override, run_at)            
 
         run_at_am_pm = run_at.strftime("%I:%M %p")
         self.log(f"PeakEfficiency initialized, will run daily at {run_at_am_pm}.")
