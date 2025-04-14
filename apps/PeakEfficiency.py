@@ -3,6 +3,7 @@ import hassapi as hass
 from datetime import timedelta
 import json
 from datetime import datetime, timezone
+from dataclasses import dataclass, asdict, fields
 
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
@@ -12,9 +13,25 @@ DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
 RESTORE_TEMPERATURE_TIMER = "timer.peak_efficiency_retore_temperature"
 MANUAL_START = "input_boolean.start_peak_efficiency"
 DRY_RUN = "input_boolean.peak_efficiency_dry_run"
-STATE_BUFFER = "input_text.peakefficiency_restore_state"
+CLIMATE_STATE = "input_text.peakefficiency_restore_state"
 OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
 
+
+@dataclass
+class ClimateState:
+    climate: str
+    outside_temp: float
+    start_temp: float
+
+    def to_json(self):
+        """Convert the dataclass to a JSON string."""
+        return json.dumps(asdict(self))
+
+    @staticmethod
+    def from_json(json_str):
+        """Create a ClimateState instance from a JSON string."""
+        data = json.loads(json_str)
+        return ClimateState(**data)
 
 class PeakEfficiency(hass.Hass):
 
@@ -123,56 +140,71 @@ class PeakEfficiency(hass.Hass):
         # Schedule restore after heat_duration
         #self.run_in(self.restore_temperature, heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
         
-        state = {
-            "climate": climate,
-            "outside_temp": outside_temp,
-            "start_temp": current_temp
-        } 
-        self.call_service("input_text/set_value", entity_id=STATE_BUFFER, value=json.dumps(state))
+        self.save_climate_state(ClimateState(climate=climate, outside_temp=outside_temp, start_temp=current_temp))
+        self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
         
-        #convert duration in sections to "HH:MM:SS" string format
-        duration_str = str(timedelta(seconds=heat_duration))
-        self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=duration_str)
-        
-    def get_restore_state_info(self):
-        try:
-            raw_state = self.get_state(STATE_BUFFER)
-            if not raw_state:
-                raise ValueError("State buffer is empty or unavailable.")
-            return json.loads(raw_state)
-        except json.JSONDecodeError as e:
-            self.error(f"Failed to decode state buffer: {e}")
-            raise
-        except Exception as e:
-            self.error(f"Unexpected error while retrieving state buffer: {e}")
-            raise
-        
-    def clear_restore_state_info(self):
-        try:
-            self.call_service("input_text/set_value", entity_id=STATE_BUFFER, value="")
-        except Exception as e:
-            self.error(f"Failed to clear state buffer: {e}")      
-
     def restore_temperature(self, event_name, data, kwargs):
         
-        state_info = self.get_restore_state_info()
-        #clear the state info
-        self.clear_restore_state_info()
+        climate_state = self.get_climate_state()
 
-        climate = state_info["climate"]
-        outside_temp = state_info["outside_temp"]
-        start = state_info["start_temp"]
+        climate = climate_state.climate
+        outside_temp = climate_state.outside_temp
+        start_temp = climate_state.start_temp
         current = self.get_state(climate, attribute="current_temperature")
+        
         do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run: 
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.restore_temp)
-        else:
-            self.log(f"{climate}: Not modifying temperature as Dry Run mode is enabled")
 
-        self.log(f'Restored {climate} to {self.restore_temp}C | Outside: {outside_temp}C | Start: {start}C | End: {current}C')
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")    
 
         # Process the next entity after this one finishes
         self.process_next_climate()
+        
+    def save_climate_state(self, state: ClimateState):
+        """
+        Save a ClimateState object to an input_text entity.
+        Raises an error if the input_text entity is not empty.
+        """
+        current_value = self.get_state(CLIMATE_STATE)
+        if current_value:
+            raise ValueError(f"Cannot save state to {CLIMATE_STATE}: it is not empty.")
+        
+        try:
+            self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value=state.to_json())
+            self.log(f"State saved to {CLIMATE_STATE}: {state}")
+        except Exception as e:
+            self.error(f"Failed to save state to {CLIMATE_STATE}: {e}")
+            raise
+
+    def get_climate_state(self, clear_after_reading=True) -> ClimateState:
+        """
+        Retrieve and decode the state from an input_text entity as a ClimateState object.
+        """
+        try:
+            raw_state = self.get_state(CLIMATE_STATE)
+            if not raw_state:
+                raise ValueError(f"State in {CLIMATE_STATE} is empty or unavailable.")
+            if clear_after_reading:
+                self.clear_climate_state()
+            return ClimateState.from_json(raw_state)
+        except json.JSONDecodeError as e:
+            self.error(f"Failed to decode state from {CLIMATE_STATE}: {e}")
+            raise
+        except Exception as e:
+            self.error(f"Unexpected error while retrieving state from {CLIMATE_STATE}: {e}")
+            raise
+
+    def clear_climate_state(self):
+        """
+        Clear the state in an input_text entity by calling save_state with an empty ClimateState.
+        """
+        try:
+            self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value="")
+            self.log(f"State cleared for {CLIMATE_STATE}")
+        except Exception as e:
+            self.error(f"Failed to clear state for {CLIMATE_STATE}: {e}")
+            raise        
         
     def terminate(self):
         #not using this for now
