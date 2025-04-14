@@ -232,7 +232,7 @@ class PeakEfficiency(hass.Hass):
             self.error(f"Failed to clear state for {{CLIMATE_STATE}}: {e}")
             raise        
         
-    def get_hourly_forecast(lat, lon, hours=6):
+    def get_hourly_forecast(self, lat, lon, hours=6):
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": lat,
@@ -244,6 +244,8 @@ class PeakEfficiency(hass.Hass):
 
         response = requests.get(url, params=params)
         data = response.json()
+        
+        self.log(f"Forecast data: {data}")
 
         times = data["hourly"]["time"]
         temps = data["hourly"]["temperature_2m"]
