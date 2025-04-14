@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict, fields
 import requests
 import math
 
+DEFAULT_RUN_AT_TIME = time(15, 0, 0)  # Default run time is 3 PM
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
 DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
@@ -40,6 +41,14 @@ class ClimateState:
 class PeakEfficiency(hass.Hass):
 
     def initialize(self):
+        
+        self.latitude = self.args.get("latitude")
+        self.longitude = self.args.get("longitude")
+        
+        if self.latitude is None or self.longitude is None:
+            self.log("Latitude and longitude arguments not provided, forecast will not be used", level="WARNING")
+        
+        self.schedule_handle = None
         #make sure helpers exist, otherwise error out
         #check if the timer exists
         self.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
@@ -87,20 +96,22 @@ class PeakEfficiency(hass.Hass):
             else:
                 self.log("Could not retrieve 'finishes_at' attribute from the timer.")
             
-                        
             self.log(f"PeakEfficiency timer is active for {climate_state.climate}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
         
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
         self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
         
-        #default start time is 3pm
-        run_at = time(15, 0, 0)   
+        #run manually and then schedule then run the scheduler daily to figure when the best time to run override based on the weather forecast
+        self.schedule_run()
+        self.run_daily(self.schedule_run, time(12, 0, 0))
         
-        lat = self.args.get("latitude")
-        lon = self.args.get("longitude")
-
-        if lat is not None and lon is not None:
-            forecast = self.get_hourly_forecast(lat, lon, hours=24)
+        self.log(f"PeakEfficiency initialized.")
+        
+    def schedule_run(self):
+        '''Figure out when the best time to run is based on the forecast.'''
+        
+        if self.latitude is not None and self.longitude is not None:
+            forecast = self.get_hourly_forecast(self.latitude, self.longitude, hours=24)
             
             #get total run time of heat_durations
             total_run_time = sum(self.heat_durations.values())
@@ -110,12 +121,19 @@ class PeakEfficiency(hass.Hass):
             self.log(f"Best start time based on weather forecast is: {best_start_time}", level="INFO")
             
             run_at = best_start_time.time() if best_start_time else run_at
-                        
+        else:
+            self.log("Latitude and longitude not set, using default run time.", level="WARNING")
+            #default start time is 3pm
+            run_at = DEFAULT_RUN_AT_TIME            
 
-        self.run_daily(self.start_override, run_at)            
-
+        if self.schedule_handle is not None:
+            self.log(f"PeakEfficiency already scheduled for {self.schedule_handle}, cancelling it.")
+            self.cancel_timer(self.schedule_handle)
+            
+        self.schedule_handle = self.run_daily(self.start_override, run_at)
+        
         run_at_am_pm = run_at.strftime("%I:%M %p")
-        self.log(f"PeakEfficiency initialized, will run daily at {run_at_am_pm}.")
+        self.log(f"PeakEfficiency will run today at {run_at_am_pm}.", level="INFO")
 
     def safe_get_float(self, entity_id, default):
         try:
