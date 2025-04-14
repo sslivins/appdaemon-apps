@@ -63,14 +63,14 @@ class PeakEfficiency(hass.Hass):
         self.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
         self.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start")
         self.assert_entity_exists(DRY_RUN, "Peak Efficiency Dry Run")
-        self.assert_entity_exists(STATE_BUFFER, "Peak Efficiency State Buffer")
+        self.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
         self.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor")
         
         #check if timer is running which means we are in the middle of a run
         timer_state = self.get_state(RESTORE_TEMPERATURE_TIMER)
         if timer_state == "active":
             #get the state info
-            state_info = self.get_restore_state_info()
+            climate_state = self.get_climate_state(clear_after_reading=False)
             #get time left on timer
             hours, minutes, seconds = 0, 0, 0
             finishes_at = self.get_state(RESTORE_TEMPERATURE_TIMER, attribute="finishes_at")
@@ -86,7 +86,7 @@ class PeakEfficiency(hass.Hass):
                 self.log("Could not retrieve 'finishes_at' attribute from the timer.")
             
                         
-            self.log(f"PeakEfficiency timer is active for {state_info['climate']}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
+            self.log(f"PeakEfficiency timer is active for {climate_state.climate}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
         
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
         self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)        
