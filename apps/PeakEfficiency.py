@@ -15,6 +15,8 @@ MANUAL_START = "input_boolean.start_peak_efficiency"
 DRY_RUN = "input_boolean.peak_efficiency_dry_run"
 CLIMATE_STATE = "input_text.peakefficiency_restore_state"
 OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
+AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
+AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
 
 
 @dataclass
@@ -36,8 +38,18 @@ class ClimateState:
 class PeakEfficiency(hass.Hass):
 
     def initialize(self):
-        self.restore_temp = self.safe_get_float("input_number.away_mode_target_temperature", DEFAULT_AWAY_MODE_TEMP)
-        self.heat_to_temp = self.safe_get_float("input_number.away_mode_peak_heat_to_tempearture", DEFAULT_PEAK_HEAT_TEMP)
+        #make sure helpers exist, otherwise error out
+        #check if the timer exists
+        self.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
+        self.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
+        self.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start", required=False)
+        self.assert_entity_exists(DRY_RUN, "Peak Efficiency Dry Run", required=False)
+        self.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor", required=False)
+        self.assert_entity_exists(AWAY_TARGET_TEMP, "Away Mode Target Temperature", required=False)
+        self.assert_entity_exists(AWAY_PEAK_HEAT_TO_TEMP, "Away Mode Peak Heat Temperature", required=False)
+        
+        self.restore_temp = self.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
+        self.heat_to_temp = self.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
 
         # Define custom heating durations for each zone (in seconds)
         self.heat_durations = {
@@ -57,14 +69,6 @@ class PeakEfficiency(hass.Hass):
         # Run daily at 3:00 PM
         run_at = time(15, 0, 0)  # 3:00 PM
         self.run_daily(self.start_override, run_at)
-        
-        #make sure helpers exist, otherwise error out
-        #check if the timer exists
-        self.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
-        self.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start")
-        self.assert_entity_exists(DRY_RUN, "Peak Efficiency Dry Run")
-        self.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
-        self.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor")
         
         #check if timer is running which means we are in the middle of a run
         timer_state = self.get_state(RESTORE_TEMPERATURE_TIMER)
@@ -101,11 +105,24 @@ class PeakEfficiency(hass.Hass):
             self.log(f"Could not read {entity_id}, using default {default}", level="WARNING")
             return default
         
-    def assert_entity_exists(self, entity_id, friendly_name=None):
-        if self.get_state(entity_id) is None:
-            name = friendly_name or entity_id
-            self.error(f"Required helper '{name}' does not exist in Home Assistant!")
-            raise ValueError(f"Missing entity: {entity_id}. Helper must be manually created in Home Assistant")
+    def assert_entity_exists(self, entity_id, friendly_name=None, required=True):
+        """
+        Check if an entity exists in Home Assistant. If it doesn't, log an error and raise a ValueError.
+        :param entity_id: The entity ID to check.
+        :param friendly_name: Optional friendly name for logging.
+        :param required: If True, raise an error if the entity does not exist.
+        """
+        entity_state = self.get_state(entity_id)
+        
+        if entity_state is not None:
+            return
+        
+        if required:
+            friendly_name = friendly_name or entity_id
+            self.error(f"Entity {friendly_name} ({entity_id}) does not exist in Home Assistant.")
+            raise ValueError(f"Entity {friendly_name} ({entity_id}) does not exist in Home Assistant.")
+        else:
+            self.log(f"Entity {friendly_name} ({entity_id}) does not exist in Home Assistant. Proceeding without it.", level="WARNING")
         
 
     def start_override(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
@@ -125,7 +142,7 @@ class PeakEfficiency(hass.Hass):
             return
 
         climate = self.active_queue.pop(0)
-        heat_duration = self.heat_durations.get(climate, DEFAULT_HEATING_DURATION)  # Default to 20 minutes if not specified
+        heat_duration = self.heat_durations.get(climate, DEFAULT_HEATING_DURATION)
         self.log(f"Overriding {climate} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
 
         do_dry_run = self.get_state(DRY_RUN) == "on"
