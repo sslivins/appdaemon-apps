@@ -125,6 +125,9 @@ class PeakEfficiency(hass.Hass):
         if self.latitude is not None and self.longitude is not None:
             forecast = self.get_hourly_forecast(self.latitude, self.longitude, hours=24)
             
+            for f_time, f_temp, f_humidity, f_radiation in forecast:
+                self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
+            
             #get total run time of heat_durations
             total_run_time = sum(self.heat_durations.values())
             
