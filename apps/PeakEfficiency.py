@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
 import requests
+import math
 
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
@@ -54,8 +55,8 @@ class PeakEfficiency(hass.Hass):
 
         # Define custom heating durations for each zone (in seconds)
         self.heat_durations = {
-            "climate.main_floor": 2 * 60,
-            "climate.master_bedroom": 2 * 60,
+            "climate.main_floor": 40 * 60,
+            "climate.master_bedroom": 20 * 60,
             "climate.basement_master": 20 * 60,
             "climate.basement_bunk_rooms": 30 * 60,
             "climate.ski_room": 10 * 60
@@ -97,11 +98,16 @@ class PeakEfficiency(hass.Hass):
         
         lat = self.args.get("latitude")
         lon = self.args.get("longitude")
-        
-        forecast = self.get_hourly_forecast(lat, lon, hours=18) 
-        
-        for f_time, f_temp in forecast:
-            self.log(f"{f_time}: {f_temp} C")
+
+        if lat is not None and lon is not None:
+            forecast = self.get_hourly_forecast(lat, lon, hours=24)
+            
+            #get total run time of heat_durations
+            total_run_time = sum(self.heat_durations.values())
+            
+            best_start_time, _ =self.warmest_hours(forecast, total_run_time)
+            
+            self.log(f"Best start time for peak efficiency is {best_start_time}.")
             
 
         run_at_am_pm = run_at.strftime("%I:%M %p")
@@ -237,29 +243,41 @@ class PeakEfficiency(hass.Hass):
         params = {
             "latitude": lat,
             "longitude": lon,
-            "hourly": "temperature_2m",
+            "hourly": "temperature_2m,relative_humidity_2m,shortwave_radiation",
             "forecast_days": 1,
             "timezone": "auto"
         }
 
         response = requests.get(url, params=params)
         data = response.json()
-        
-        self.log(f"Forecast data: {data}")
 
         times = data["hourly"]["time"]
         temps = data["hourly"]["temperature_2m"]
+        humidity = data["hourly"]["relative_humidity_2m"]
+        radiation = data["hourly"]["shortwave_radiation"]
 
-        forecast = []
-        now = datetime.now().isoformat()[:13]  # get current hour as prefix
+        # Return a list of tuples for unpacking
+        return list(zip(times, temps, humidity, radiation))[:hours]
+    
+    def warmest_hours(forecast, minutes):
+        block_size = math.ceil(minutes / 60)  # round up to full hours
+        if len(forecast) < block_size:
+            raise ValueError("Forecast data too short for the requested window")
 
-        for t, temp in zip(times, temps):
-            if t.startswith(now) or len(forecast) < hours:
-                forecast.append((t, temp))
-                if len(forecast) >= hours:
-                    break
+        max_sum = float('-inf')
+        best_start_time = None
 
-        return forecast        
+        # forecast is list of tuples: (time, temp)
+        for i in range(len(forecast) - block_size + 1):
+            window = forecast[i:i + block_size]
+            temp_sum = sum(temp for _, temp in window)
+
+            if temp_sum > max_sum:
+                max_sum = temp_sum
+                best_start_time = window[0][0]  # timestamp of the first hour
+
+        return best_start_time, block_size
+    
         
     def terminate(self):
         #not using this for now
