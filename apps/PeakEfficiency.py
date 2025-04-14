@@ -4,6 +4,7 @@ from datetime import timedelta
 import json
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
+import requests
 
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
@@ -66,7 +67,6 @@ class PeakEfficiency(hass.Hass):
         # Optional trigger
         self.listen_state(self.start_override, MANUAL_START, new="on")
 
-        # Run daily at 3:00 PM
         run_at = time(15, 0, 0)  # 3:00 PM
         self.run_daily(self.start_override, run_at)
         
@@ -93,7 +93,16 @@ class PeakEfficiency(hass.Hass):
             self.log(f"PeakEfficiency timer is active for {climate_state.climate}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
         
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
-        self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)        
+        self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
+        
+        lat = self.args.get("latitude")
+        lon = self.args.get("longitude")
+        
+        forecast = self.get_hourly_forecast(lat, lon) 
+        
+        for time, temp in forecast:
+            self.log(f"{time}: {temp}°C")
+            
 
         run_at_am_pm = run_at.strftime("%I:%M %p")
         self.log(f"PeakEfficiency initialized, will run daily at {run_at_am_pm}.")
@@ -222,6 +231,33 @@ class PeakEfficiency(hass.Hass):
         except Exception as e:
             self.error(f"Failed to clear state for {{CLIMATE_STATE}}: {e}")
             raise        
+        
+    def get_hourly_forecast(lat, lon, hours=6):
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": "temperature_2m",
+            "forecast_days": 1,
+            "timezone": "auto"
+        }
+
+        response = requests.get(url, params=params)
+        data = response.json()
+
+        times = data["hourly"]["time"]
+        temps = data["hourly"]["temperature_2m"]
+
+        forecast = []
+        now = datetime.now().isoformat()[:13]  # get current hour as prefix
+
+        for t, temp in zip(times, temps):
+            if t.startswith(now) or len(forecast) < hours:
+                forecast.append((t, temp))
+                if len(forecast) >= hours:
+                    break
+
+        return forecast        
         
     def terminate(self):
         #not using this for now
