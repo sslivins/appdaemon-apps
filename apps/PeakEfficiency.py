@@ -7,6 +7,14 @@ DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
 DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
 
+#home assistant helpers
+RESTORE_TEMPERATURE_TIMER = "timer.peak_efficiency_retore_temperature"
+MANUAL_START = "input_boolean.start_peak_efficiency"
+DRY_RUN = "input_boolean.peak_efficiency_dry_run"
+STATE_BUFFER = "input_text.peakefficiency_restore_state"
+OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
+
+
 class PeakEfficiency(hass.Hass):
 
     def initialize(self):
@@ -26,14 +34,22 @@ class PeakEfficiency(hass.Hass):
         self.active_queue = []  # Will store entities to run
 
         # Optional trigger
-        self.listen_state(self.start_override, "input_boolean.start_peak_efficiency", new="on")
+        self.listen_state(self.start_override, MANUAL_START, new="on")
 
         # Run daily at 3:00 PM
         run_at = time(15, 0, 0)  # 3:00 PM
         self.run_daily(self.start_override, run_at)
         
+        #make sure helpers exist, otherwise error out
+        #check if the timer exists
+        self.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
+        self.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start")
+        self.assert_entity_exists(DRY_RUN, "Peak Efficiency Dry Run")
+        self.assert_entity_exists(STATE_BUFFER, "Peak Efficiency State Buffer")
+        self.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor")
+        
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
-        self.listen_event(self.restore_temperature, "timer.finished", entity_id="timer.peak_efficiency_retore_temperature")        
+        self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)        
 
         run_at_am_pm = run_at.strftime("%I:%M %p")
         self.log(f"PeakEfficiency initialized, will run daily at {run_at_am_pm}.")
@@ -44,6 +60,13 @@ class PeakEfficiency(hass.Hass):
         except (TypeError, ValueError):
             self.log(f"Could not read {entity_id}, using default {default}", level="WARNING")
             return default
+        
+    def assert_entity_exists(self, entity_id, friendly_name=None):
+        if self.get_state(entity_id) is None:
+            name = friendly_name or entity_id
+            self.error(f"❌ Required helper '{name}' does not exist in Home Assistant!")
+            raise ValueError(f"Missing entity: {entity_id}. Helper must be manually created in Home Assistant")
+        
 
     def start_override(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         # Create a queue of entities that are in heat mode
@@ -65,13 +88,13 @@ class PeakEfficiency(hass.Hass):
         heat_duration = self.heat_durations.get(climate, DEFAULT_HEATING_DURATION)  # Default to 20 minutes if not specified
         self.log(f"Overriding {climate} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
 
-        do_dry_run = self.get_state("input_boolean.peak_efficiency_dry_run") == "on"
+        do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run:
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.heat_to_temp)
         else:
             self.log(f"{climate}: Not modifying temperature as Dry Run mode is enabled")
 
-        outside_temp = self.get_state("sensor.condenser_temperature_sensor_temperature")
+        outside_temp = self.get_state(OUTDOOR_TEMPERATURE_SENSOR)
         current_temp = self.get_state(climate, attribute="current_temperature")
 
         # Schedule restore after heat_duration
@@ -82,22 +105,21 @@ class PeakEfficiency(hass.Hass):
             "outside_temp": outside_temp,
             "start_temp": current_temp
         } 
-        self.call_service("input_text/set_value", entity_id="input_text.peakefficiency_restore_state", value=json.dumps(state))
+        self.call_service("input_text/set_value", entity_id=STATE_BUFFER, value=json.dumps(state))
         
         #convert duration in sections to "HH:MM:SS" string format
         duration_str = str(timedelta(seconds=heat_duration))
-        print(f"Duration string: {duration_str}")
-        self.call_service("timer/start", entity_id="timer.peak_efficiency_retore_temperature", duration=duration_str)
+        self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=duration_str)
 
     def restore_temperature(self):
         
-        raw_state = self.get_state("input_text.heat_restore_state")
+        raw_state = self.get_state(STATE_BUFFER)
         state_info = json.loads(raw_state)
         climate = state_info["climate"]
         outside_temp = state_info["outside_temp"]
         start = state_info["start_temp"]
         current = self.get_state(climate, attribute="current_temperature")
-        do_dry_run = self.get_state("input_boolean.peak_efficiency_dry_run") == "on"
+        do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run: 
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.restore_temp)
         else:
