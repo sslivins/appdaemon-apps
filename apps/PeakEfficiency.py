@@ -259,7 +259,7 @@ class PeakEfficiency(hass.Hass):
         # Return a list of tuples for unpacking
         return list(zip(times, temps, humidity, radiation))[:hours]
     
-    def warmest_hours(forecast, minutes):
+    def warmest_hours(self, forecast, minutes):
         block_size = math.ceil(minutes / 60)  # round up to full hours
         if len(forecast) < block_size:
             raise ValueError("Forecast data too short for the requested window")
