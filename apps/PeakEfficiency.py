@@ -100,8 +100,8 @@ class PeakEfficiency(hass.Hass):
         
         forecast = self.get_hourly_forecast(lat, lon) 
         
-        for time, temp in forecast:
-            self.log(f"{time}: {temp}°C")
+        for f_time, f_temp in forecast:
+            self.log(f"{f_time}: {f_temp}°C")
             
 
         run_at_am_pm = run_at.strftime("%I:%M %p")
