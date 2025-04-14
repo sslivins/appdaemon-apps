@@ -24,8 +24,8 @@ class PeakEfficiency(hass.Hass):
 
         # Define custom heating durations for each zone (in seconds)
         self.heat_durations = {
-            "climate.main_floor": 40 * 60,
-            "climate.master_bedroom": 20 * 60,
+            "climate.main_floor": 2 * 60,
+            "climate.master_bedroom": 2 * 60,
             "climate.basement_master": 20 * 60,
             "climate.basement_bunk_rooms": 30 * 60,
             "climate.ski_room": 10 * 60
@@ -87,7 +87,7 @@ class PeakEfficiency(hass.Hass):
     def assert_entity_exists(self, entity_id, friendly_name=None):
         if self.get_state(entity_id) is None:
             name = friendly_name or entity_id
-            self.error(f"❌ Required helper '{name}' does not exist in Home Assistant!")
+            self.error(f"Required helper '{name}' does not exist in Home Assistant!")
             raise ValueError(f"Missing entity: {entity_id}. Helper must be manually created in Home Assistant")
         
 
@@ -114,8 +114,8 @@ class PeakEfficiency(hass.Hass):
         do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run:
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.heat_to_temp)
-        else:
-            self.log(f"{climate}: Not modifying temperature as Dry Run mode is enabled")
+            
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Setting temperature to {self.heat_to_temp}C")         
 
         outside_temp = self.get_state(OUTDOOR_TEMPERATURE_SENSOR)
         current_temp = self.get_state(climate, attribute="current_temperature")
@@ -153,9 +153,11 @@ class PeakEfficiency(hass.Hass):
         except Exception as e:
             self.error(f"Failed to clear state buffer: {e}")      
 
-    def restore_temperature(self):
+    def restore_temperature(self, event_name, data, kwargs):
         
         state_info = self.get_restore_state_info()
+        #clear the state info
+        self.clear_restore_state_info()
 
         climate = state_info["climate"]
         outside_temp = state_info["outside_temp"]
