@@ -1,5 +1,7 @@
 from datetime import time
 import hassapi as hass
+from datetime import timedelta
+import json
 
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
@@ -29,6 +31,9 @@ class PeakEfficiency(hass.Hass):
         # Run daily at 3:00 PM
         run_at = time(15, 0, 0)  # 3:00 PM
         self.run_daily(self.start_override, run_at)
+        
+        #using timer helper from home assistant to restore the temperature even if home assistant reboots
+        self.listen_event(self.restore_temperature, "timer.finished", entity_id="timer.peak_efficiency_retore_temperature")        
 
         run_at_am_pm = run_at.strftime("%I:%M %p")
         self.log(f"PeakEfficiency initialized, will run daily at {run_at_am_pm}.")
@@ -70,12 +75,27 @@ class PeakEfficiency(hass.Hass):
         current_temp = self.get_state(climate, attribute="current_temperature")
 
         # Schedule restore after heat_duration
-        self.run_in(self.restore_temperature, heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
+        #self.run_in(self.restore_temperature, heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
+        
+        state = {
+            "climate": climate,
+            "outside_temp": outside_temp,
+            "start_temp": current_temp
+        } 
+        self.call_service("input_text/set_value", entity_id="input_text.peakefficiency_restore_state", value=json.dumps(state))
+        
+        #convert duration in sections to "HH:MM:SS" string format
+        duration_str = str(timedelta(seconds=heat_duration))
+        print(f"Duration string: {duration_str}")
+        self.call_service("timer/start", entity_id="timer.peak_efficiency_retore_temperature", duration=duration_str)
 
-    def restore_temperature(self, kwargs):
-        climate = kwargs["climate"]
-        outside_temp = kwargs["outside_temp"]
-        start = kwargs["start_temp"]
+    def restore_temperature(self):
+        
+        raw_state = self.get_state("input_text.heat_restore_state")
+        state_info = json.loads(raw_state)
+        climate = state_info["climate"]
+        outside_temp = state_info["outside_temp"]
+        start = state_info["start_temp"]
         current = self.get_state(climate, attribute="current_temperature")
         do_dry_run = self.get_state("input_boolean.peak_efficiency_dry_run") == "on"
         if not do_dry_run: 
@@ -87,3 +107,7 @@ class PeakEfficiency(hass.Hass):
 
         # Process the next entity after this one finishes
         self.process_next_climate()
+        
+    def terminate(self):
+        #not using this for now
+        pass
