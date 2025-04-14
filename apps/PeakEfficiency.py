@@ -248,9 +248,27 @@ class PeakEfficiency(hass.Hass):
             "timezone": "auto"
         }
 
-        response = requests.get(url, params=params)
-        data = response.json()
-
+        try:
+            # Check if the API is reachable
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            
+            data = response.json()            
+        except requests.exceptions.RequestException as e:
+            self.error(f"Error fetching forecast data: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            self.error(f"Error decoding JSON response: {e}")
+            return []
+        except Exception as e:
+            self.error(f"Unexpected error: {e}")
+            return []
+        
+        # Check if the response contains the expected data
+        if "hourly" not in data or not data["hourly"]:
+            self.error("Invalid response structure from Open-Meteo API.")
+            return []
+        
         times = data["hourly"]["time"]
         temps = data["hourly"]["temperature_2m"]
         humidity = data["hourly"]["relative_humidity_2m"]
