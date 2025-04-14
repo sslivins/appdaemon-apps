@@ -93,6 +93,18 @@ class PeakEfficiency(hass.Hass):
                 if time_left.total_seconds() > 0:
                     hours, remainder = divmod(time_left.total_seconds(), 3600)
                     minutes, seconds = divmod(remainder, 60)
+                    
+                #add the remaining thermostats to the queue after the current one
+                if climate_state and climate_state.climate in self.full_entity_list:
+                    start_index = self.full_entity_list.index(climate_state.climate) + 1
+                    self.active_queue = []
+                    found_current = False
+                    for entity in self.full_entity_list:
+                        if entity == climate_state.climate:
+                            found_current = True
+                            continue
+                        if found_current and self.get_state(entity) == "heat":
+                            self.active_queue.append(entity)
             else:
                 self.log("Could not retrieve 'finishes_at' attribute from the timer.")
             
@@ -101,7 +113,7 @@ class PeakEfficiency(hass.Hass):
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
         self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
         
-        #run manually and then schedule then run the scheduler daily to figure when the best time to run override based on the weather forecast
+        #run manually and then run the scheduler daily to figure when the best time to run override based on the weather forecast
         self.schedule_run()
         self.run_daily(self.schedule_run, time(12, 0, 0))
         
