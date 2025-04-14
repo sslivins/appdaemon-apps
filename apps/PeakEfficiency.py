@@ -1,20 +1,60 @@
 from datetime import time
 import hassapi as hass
+from datetime import timedelta
+import json
+from datetime import datetime, timezone
+from dataclasses import dataclass, asdict, fields
 
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
 DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
 
+#home assistant helpers
+RESTORE_TEMPERATURE_TIMER = "timer.peak_efficiency_retore_temperature"
+MANUAL_START = "input_boolean.start_peak_efficiency"
+DRY_RUN = "input_boolean.peak_efficiency_dry_run"
+CLIMATE_STATE = "input_text.peakefficiency_restore_state"
+OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
+AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
+AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
+
+
+@dataclass
+class ClimateState:
+    climate: str
+    outside_temp: float
+    start_temp: float
+
+    def to_json(self):
+        """Convert the dataclass to a JSON string."""
+        return json.dumps(asdict(self))
+
+    @staticmethod
+    def from_json(json_str):
+        """Create a ClimateState instance from a JSON string."""
+        data = json.loads(json_str)
+        return ClimateState(**data)
+
 class PeakEfficiency(hass.Hass):
 
     def initialize(self):
-        self.restore_temp = self.safe_get_float("input_number.away_mode_target_temperature", DEFAULT_AWAY_MODE_TEMP)
-        self.heat_to_temp = self.safe_get_float("input_number.away_mode_peak_heat_to_tempearture", DEFAULT_PEAK_HEAT_TEMP)
+        #make sure helpers exist, otherwise error out
+        #check if the timer exists
+        self.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
+        self.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
+        self.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start", required=False)
+        self.assert_entity_exists(DRY_RUN, "Peak Efficiency Dry Run", required=False)
+        self.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor", required=False)
+        self.assert_entity_exists(AWAY_TARGET_TEMP, "Away Mode Target Temperature", required=False)
+        self.assert_entity_exists(AWAY_PEAK_HEAT_TO_TEMP, "Away Mode Peak Heat Temperature", required=False)
+        
+        self.restore_temp = self.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
+        self.heat_to_temp = self.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
 
         # Define custom heating durations for each zone (in seconds)
         self.heat_durations = {
-            "climate.main_floor": 40 * 60,
-            "climate.master_bedroom": 20 * 60,
+            "climate.main_floor": 2 * 60,
+            "climate.master_bedroom": 2 * 60,
             "climate.basement_master": 20 * 60,
             "climate.basement_bunk_rooms": 30 * 60,
             "climate.ski_room": 10 * 60
@@ -24,11 +64,36 @@ class PeakEfficiency(hass.Hass):
         self.active_queue = []  # Will store entities to run
 
         # Optional trigger
-        self.listen_state(self.start_override, "input_boolean.start_peak_efficiency", new="on")
+        self.listen_state(self.start_override, MANUAL_START, new="on")
 
         # Run daily at 3:00 PM
         run_at = time(15, 0, 0)  # 3:00 PM
         self.run_daily(self.start_override, run_at)
+        
+        #check if timer is running which means we are in the middle of a run
+        timer_state = self.get_state(RESTORE_TEMPERATURE_TIMER)
+        if timer_state == "active":
+            #get the state info
+            climate_state = self.get_climate_state(clear_after_reading=False)
+            #get time left on timer
+            hours, minutes, seconds = 0, 0, 0
+            finishes_at = self.get_state(RESTORE_TEMPERATURE_TIMER, attribute="finishes_at")
+            if finishes_at:
+                finishes_at_dt = datetime.fromisoformat(finishes_at)
+                now = datetime.now(timezone.utc)
+                time_left = finishes_at_dt - now
+
+                if time_left.total_seconds() > 0:
+                    hours, remainder = divmod(time_left.total_seconds(), 3600)
+                    minutes, seconds = divmod(remainder, 60)
+            else:
+                self.log("Could not retrieve 'finishes_at' attribute from the timer.")
+            
+                        
+            self.log(f"PeakEfficiency timer is active for {climate_state.climate}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
+        
+        #using timer helper from home assistant to restore the temperature even if home assistant reboots
+        self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)        
 
         run_at_am_pm = run_at.strftime("%I:%M %p")
         self.log(f"PeakEfficiency initialized, will run daily at {run_at_am_pm}.")
@@ -39,6 +104,26 @@ class PeakEfficiency(hass.Hass):
         except (TypeError, ValueError):
             self.log(f"Could not read {entity_id}, using default {default}", level="WARNING")
             return default
+        
+    def assert_entity_exists(self, entity_id, friendly_name=None, required=True):
+        """
+        Check if an entity exists in Home Assistant. If it doesn't, log an error and raise a ValueError.
+        :param entity_id: The entity ID to check.
+        :param friendly_name: Optional friendly name for logging.
+        :param required: If True, raise an error if the entity does not exist.
+        """
+        entity_state = self.get_state(entity_id)
+        
+        if entity_state is not None:
+            return
+        
+        if required:
+            friendly_name = friendly_name or entity_id
+            self.error(f"Entity {friendly_name} ({entity_id}) does not exist in Home Assistant.")
+            raise ValueError(f"Entity {friendly_name} ({entity_id}) does not exist in Home Assistant.")
+        else:
+            self.log(f"Entity {friendly_name} ({entity_id}) does not exist in Home Assistant. Proceeding without it.", level="WARNING")
+        
 
     def start_override(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         # Create a queue of entities that are in heat mode
@@ -57,33 +142,87 @@ class PeakEfficiency(hass.Hass):
             return
 
         climate = self.active_queue.pop(0)
-        heat_duration = self.heat_durations.get(climate, DEFAULT_HEATING_DURATION)  # Default to 20 minutes if not specified
+        heat_duration = self.heat_durations.get(climate, DEFAULT_HEATING_DURATION)
         self.log(f"Overriding {climate} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
 
-        do_dry_run = self.get_state("input_boolean.peak_efficiency_dry_run") == "on"
+        do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run:
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.heat_to_temp)
-        else:
-            self.log(f"{climate}: Not modifying temperature as Dry Run mode is enabled")
+            
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Setting temperature to {self.heat_to_temp}C")         
 
-        outside_temp = self.get_state("sensor.condenser_temperature_sensor_temperature")
+        outside_temp = self.get_state(OUTDOOR_TEMPERATURE_SENSOR)
         current_temp = self.get_state(climate, attribute="current_temperature")
 
         # Schedule restore after heat_duration
-        self.run_in(self.restore_temperature, heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
+        #self.run_in(self.restore_temperature, heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
+        
+        self.save_climate_state(ClimateState(climate=climate, outside_temp=outside_temp, start_temp=current_temp))
+        self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
+        
+    def restore_temperature(self, event_name, data, kwargs):
+        
+        climate_state = self.get_climate_state()
 
-    def restore_temperature(self, kwargs):
-        climate = kwargs["climate"]
-        outside_temp = kwargs["outside_temp"]
-        start = kwargs["start_temp"]
+        climate = climate_state.climate
+        outside_temp = climate_state.outside_temp
+        start_temp = climate_state.start_temp
         current = self.get_state(climate, attribute="current_temperature")
-        do_dry_run = self.get_state("input_boolean.peak_efficiency_dry_run") == "on"
+        
+        do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run: 
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.restore_temp)
-        else:
-            self.log(f"{climate}: Not modifying temperature as Dry Run mode is enabled")
 
-        self.log(f'Restored {climate} to {self.restore_temp}C | Outside: {outside_temp}C | Start: {start}C | End: {current}C')
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")    
 
         # Process the next entity after this one finishes
         self.process_next_climate()
+        
+    def save_climate_state(self, state: ClimateState):
+        """
+        Save a ClimateState object to an input_text entity.
+        Raises an error if the input_text entity is not empty.
+        """
+        current_value = self.get_state(CLIMATE_STATE)
+        if current_value != "":
+            raise ValueError(f"Cannot save state to {{CLIMATE_STATE}}: it is not empty, got {current_value}")
+        
+        try:
+            self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value=state.to_json())
+            self.log(f"State saved to {{CLIMATE_STATE}}: {state}", level="DEBUG")
+        except Exception as e:
+            self.error(f"Failed to save state to {{CLIMATE_STATE}}: {e}")
+            raise
+
+    def get_climate_state(self, clear_after_reading=True) -> ClimateState:
+        """
+        Retrieve and decode the state from an input_text entity as a ClimateState object.
+        """
+        try:
+            raw_state = self.get_state(CLIMATE_STATE)
+            if not raw_state:
+                raise ValueError(f"State in {{CLIMATE_STATE}} is empty or unavailable.")
+            if clear_after_reading:
+                self.clear_climate_state()
+            return ClimateState.from_json(raw_state)
+        except json.JSONDecodeError as e:
+            self.error(f"Failed to decode state from {{CLIMATE_STATE}}: {e}")
+            raise
+        except Exception as e:
+            self.error(f"Unexpected error while retrieving state from {{CLIMATE_STATE}}: {e}")
+            raise
+
+    def clear_climate_state(self):
+        """
+        Clear the state in an input_text entity by calling save_state with an empty ClimateState.
+        """
+        try:
+            self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value="")
+            self.log(f"State cleared for {{CLIMATE_STATE}}", level="DEBUG")
+        except Exception as e:
+            self.error(f"Failed to clear state for {{CLIMATE_STATE}}: {e}")
+            raise        
+        
+    def terminate(self):
+        #not using this for now
+        pass
