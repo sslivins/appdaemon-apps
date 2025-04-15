@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
 import requests
 import math
+import statistics
 
 DEFAULT_RUN_AT_TIME = time(15, 0, 0)  # Default run time is 3 PM
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
@@ -37,7 +38,7 @@ class ClimateState:
         """Create a ClimateState instance from a JSON string."""
         data = json.loads(json_str)
         return ClimateState(**data)
-
+    
 class PeakEfficiency(hass.Hass):
 
     def initialize(self):
@@ -75,7 +76,7 @@ class PeakEfficiency(hass.Hass):
         self.active_queue = []  # Will store entities to run
 
         # Optional trigger
-        self.listen_state(self.start_override, MANUAL_START, new="on")
+        self.listen_state(self.start_heat_soak, MANUAL_START, new="on")
 
         #check if timer is running which means we are in the middle of a run
         timer_state = self.get_state(RESTORE_TEMPERATURE_TIMER)
@@ -111,27 +112,29 @@ class PeakEfficiency(hass.Hass):
             self.log(f"PeakEfficiency timer is active for {climate_state.climate}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
         
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
-        self.listen_event(self.restore_temperature, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
+        self.listen_event(self.stop_heat_soak, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
         
         #run manually and then run the scheduler daily to figure when the best time to run override based on the weather forecast
-        self.schedule_run()
-        self.run_daily(self.schedule_run, time(12, 0, 0))
+        self.schedule_energy_soak_run()
+        self.run_daily(self.schedule_energy_soak_run, time(12, 0, 0))
         
         self.log(f"PeakEfficiency initialized.")
         
-    def schedule_run(self):
+    def schedule_energy_soak_run(self,entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
         
+        forecastSummary = ForecastSummary(self, self.latitude, self.longitude)
+        
         if self.latitude is not None and self.longitude is not None:
-            forecast = self.get_hourly_forecast(self.latitude, self.longitude, hours=24)
+            # forecast = forecastSummary.get_hourly_forecast(self.latitude, self.longitude, hours=24)
             
-            for f_time, f_temp, f_humidity, f_radiation in forecast:
-                self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
+            # for f_time, f_temp, f_humidity, f_radiation in forecast:
+            #     self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
             
             #get total run time of heat_durations
-            total_run_time = sum(self.heat_durations.values())
+            total_run_time = sum(self.heat_durations.values()) / 60  # convert to minutes
             
-            best_start_time, _ = self.warmest_hours(forecast, total_run_time)
+            best_start_time, _ = forecastSummary.warmest_hours(total_run_time)
             
             self.log(f"Best start time based on weather forecast is: {best_start_time}", level="INFO")
             
@@ -145,7 +148,7 @@ class PeakEfficiency(hass.Hass):
             self.log(f"PeakEfficiency already scheduled for {self.schedule_handle}, cancelling it.")
             self.cancel_timer(self.schedule_handle)
             
-        self.schedule_handle = self.run_daily(self.start_override, run_at)
+        self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
         
         run_at_am_pm = run_at.strftime("%I:%M %p")
         self.log(f"PeakEfficiency will run today at {run_at_am_pm}.", level="INFO")
@@ -177,7 +180,7 @@ class PeakEfficiency(hass.Hass):
             self.log(f"Entity {friendly_name} ({entity_id}) does not exist in Home Assistant. Proceeding without it.", level="WARNING")
         
 
-    def start_override(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
+    def start_heat_soak(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         # Create a queue of entities that are in heat mode
         self.active_queue = [e for e in self.full_entity_list if self.get_state(e) == "heat"]
 
@@ -186,9 +189,9 @@ class PeakEfficiency(hass.Hass):
             return
 
         self.log(f"Starting peak override for {len(self.active_queue)} climate entities.")
-        self.process_next_climate()
+        self.process_next_zone()
 
-    def process_next_climate(self, kwargs=None):
+    def process_next_zone(self, kwargs=None):
         if not self.active_queue:
             self.log("All climate entities have been processed.")
             return
@@ -206,13 +209,10 @@ class PeakEfficiency(hass.Hass):
         outside_temp = self.get_state(OUTDOOR_TEMPERATURE_SENSOR)
         current_temp = self.get_state(climate, attribute="current_temperature")
 
-        # Schedule restore after heat_duration
-        #self.run_in(self.restore_temperature, heat_duration, climate=climate, outside_temp=outside_temp, start_temp=current_temp)
-        
         self.save_climate_state(ClimateState(climate=climate, outside_temp=outside_temp, start_temp=current_temp))
         self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
         
-    def restore_temperature(self, event_name, data, kwargs):
+    def stop_heat_soak(self, event_name, data, kwargs):
         
         climate_state = self.get_climate_state()
 
@@ -228,7 +228,7 @@ class PeakEfficiency(hass.Hass):
         self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")    
 
         # Process the next entity after this one finishes
-        self.process_next_climate()
+        self.process_next_zone()
         
     def save_climate_state(self, state: ClimateState):
         """
@@ -275,13 +275,29 @@ class PeakEfficiency(hass.Hass):
             self.error(f"Failed to clear state for {{CLIMATE_STATE}}: {e}")
             raise        
         
+    def terminate(self):
+        #not using this for now
+        pass
+
+
+class ForecastSummary:
+    def __init__(self, app, lat, lon):
+        self.app = app
+        self.lat = lat
+        self.lon = lon
+        self.forecast_data = self.get_hourly_forecast(lat, lon, hours=24)
+        
     def get_hourly_forecast(self, lat, lon, hours=6):
+        
+        #calculate forecast days based on hours
+        forecast_days = math.ceil(hours / 24)
+        
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": lat,
             "longitude": lon,
             "hourly": "temperature_2m,relative_humidity_2m,shortwave_radiation",
-            "forecast_days": 1,
+            "forecast_days": forecast_days,
             "timezone": "auto"
         }
 
@@ -312,10 +328,32 @@ class PeakEfficiency(hass.Hass):
         radiation = data["hourly"]["shortwave_radiation"]
 
         # Return a list of tuples for unpacking
-        return list(zip(times, temps, humidity, radiation))[:hours]
+        return list(zip(times, temps, humidity, radiation))[:hours]  
     
-    def warmest_hours(self, forecast, seconds):
-        block_size = math.ceil(seconds / (60*60) )  # round up to full hours
+    
+    def warmest_hours(self, minutes):
+        """
+        Determines the starting time and duration of the warmest consecutive hours 
+        within a given forecast.
+        Args:
+            forecast (list of tuples): A list of forecast data where each tuple contains 
+                (time, temperature, humidity, radiation). Only the time and temperature 
+                are used in this function.
+            minutes (int): The duration in minutes for which the warmest period is to 
+                be calculated. This value is rounded up to the nearest full hour.
+        Returns:
+            tuple: A tuple containing:
+                - best_start_time (datetime): The starting time of the warmest period.
+                - block_size (int): The number of hours in the warmest period.
+        Raises:
+            ValueError: If the forecast data is shorter than the required window size.
+        Notes:
+            - The function calculates the sum of temperatures for consecutive hours 
+              and identifies the period with the highest sum.
+            - The forecast data must be in ISO 8601 format for the time values.
+        """
+        forecast = self.forecast_data
+        block_size = math.ceil(minutes / 60 )  # round up to full hours
         if len(forecast) < block_size:
             raise ValueError("Forecast data too short for the requested window")
 
@@ -333,9 +371,48 @@ class PeakEfficiency(hass.Hass):
                 max_sum = temp_sum
                 best_start_time = window[0][0]  # timestamp of the first hour
 
-        return best_start_time, block_size
-    
-        
-    def terminate(self):
-        #not using this for now
-        pass
+        return best_start_time, block_size          
+
+    def _filter_overnight_hours(self, data):
+        """
+        Filter for hours between sunset and wake-up (e.g. 8pm to 8am).
+        Adjust as needed.
+        """
+        overnight = []
+        for t, temp, rh, rad in data:
+            hour = datetime.fromisoformat(t).hour
+            if hour >= 20 or hour <= 8: # 8 PM to 8 AM
+                overnight.append((t, temp, rh, rad))
+        return overnight
+
+    def summarize(self):
+        overnight = self._filter_overnight_hours(self.forecast_data)
+
+        if not overnight:
+            self.app.log("No overnight data available for summary.")
+            return {}
+
+        temps = [temp for _, temp, _, _ in overnight]
+        humidities = [rh for _, _, rh, _ in overnight]
+        radiation = [rad for _, _, _, rad in overnight]
+
+        min_temp = min(temps)
+        avg_temp = statistics.mean(temps)
+        avg_humidity = statistics.mean(humidities)
+        avg_radiation = statistics.mean(radiation)
+
+        duration_below_zero = sum(1 for t in temps if t < 0)
+
+        # Find time of min temperature
+        min_temp_index = temps.index(min_temp)
+        min_temp_time = overnight[min_temp_index][0]
+        min_temp_hour = datetime.fromisoformat(min_temp_time).hour
+
+        return {
+            "min_forecast_temp_overnight": min_temp,
+            "avg_forecast_temp_overnight": avg_temp,
+            "avg_humidity_overnight": avg_humidity,
+            "avg_radiation_overnight": avg_radiation,
+            "duration_below_zero": duration_below_zero,
+            "hour_of_min_temp": min_temp_hour
+        }
