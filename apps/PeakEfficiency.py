@@ -285,12 +285,13 @@ class ForecastSummary:
         self.app = app
         self.lat = lat
         self.lon = lon
-        self.forecast_data = self._get_hourly_forecast(lat, lon, hours=24)
+        self.forecast_data = self._get_hourly_forecast(lat, lon, hours=48)
         
-    def get_forecast_data(self):
+    def get_forecast_data(self, start_time=None, end_time=None):
         """
         Returns the forecast data.
         """
+               
         return self.forecast_data
         
     def _get_hourly_forecast(self, lat, lon, hours=6):
