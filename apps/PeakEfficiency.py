@@ -340,8 +340,10 @@ class ForecastSummary:
     
     def warmest_hours(self, minutes):
         """
-        Determines the starting time and duration of the warmest consecutive hours 
-        within a given forecast.
+        within a given forecast, ensuring the period is within the current day and 
+        starts after the current time (not in the past).
+            - The identified period must start after the current time and end within 
+              the current day.
         Args:
             forecast (list of tuples): A list of forecast data where each tuple contains 
                 (time, temperature, humidity, radiation). Only the time and temperature 
