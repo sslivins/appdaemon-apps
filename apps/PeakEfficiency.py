@@ -151,7 +151,7 @@ class PeakEfficiency(hass.Hass):
             self.log(f"PeakEfficiency already scheduled for {self.schedule_handle}, cancelling it.")
             self.cancel_timer(self.schedule_handle)
             
-        #dont run if not in away mode
+        #only run this while in away mode
         if not self._is_away_mode_enabled():
             self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
       
