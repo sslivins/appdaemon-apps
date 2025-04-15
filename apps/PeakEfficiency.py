@@ -374,6 +374,10 @@ class ForecastSummary:
             window = forecast_temp[i:i + block_size]
             temp_sum = sum(temp for _, temp in window)
 
+            #find the max sum of the block but must be after current time and cannot exceed current day
+            if window[0][0] < datetime.now() or window[-1][0] > datetime.now() + timedelta(days=1):
+                continue
+            
             if temp_sum > max_sum:
                 max_sum = temp_sum
                 best_start_time = window[0][0]  # timestamp of the first hour
