@@ -21,6 +21,7 @@ CLIMATE_STATE = "input_text.peakefficiency_restore_state"
 OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
 AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
 AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
+AWAY_MODE_ENABLED = "input_boolean.home_away_mode_enabled"
 
 
 @dataclass
@@ -54,6 +55,8 @@ class PeakEfficiency(hass.Hass):
         #check if the timer exists
         self.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
         self.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
+        self.assert_entity_exists(AWAY_MODE_ENABLED, "Away Mode Enabled")
+        
         self.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start", required=False)
         self.assert_entity_exists(DRY_RUN, "Peak Efficiency Dry Run", required=False)
         self.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor", required=False)
@@ -148,10 +151,14 @@ class PeakEfficiency(hass.Hass):
             self.log(f"PeakEfficiency already scheduled for {self.schedule_handle}, cancelling it.")
             self.cancel_timer(self.schedule_handle)
             
-        self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
-        
-        run_at_am_pm = run_at.strftime("%I:%M %p")
-        self.log(f"PeakEfficiency will run today at {run_at_am_pm}.", level="INFO")
+        #dont run if not in away mode
+        if not self._is_away_mode_enabled():
+            self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
+      
+            run_at_am_pm = run_at.strftime("%I:%M %p")
+            self.log(f"PeakEfficiency will run today at {run_at_am_pm}.", level="INFO")
+        else:
+            self.log(f"PeakEfficiency will not run today because Away Mode is not enabled.", level="INFO")
 
     def safe_get_float(self, entity_id, default):
         try:
@@ -273,7 +280,13 @@ class PeakEfficiency(hass.Hass):
             self.log(f"State cleared for {{CLIMATE_STATE}}", level="DEBUG")
         except Exception as e:
             self.error(f"Failed to clear state for {{CLIMATE_STATE}}: {e}")
-            raise        
+            raise
+        
+    def _is_away_mode_enabled(self):
+        """
+        Check if the home/away mode is enabled.
+        """
+        return self.get_state(AWAY_MODE_ENABLED) == "on"
         
     def terminate(self):
         #not using this for now
