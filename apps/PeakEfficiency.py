@@ -22,6 +22,8 @@ OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
 AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
 AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
 AWAY_MODE_ENABLED = "input_boolean.home_away_mode_enabled"
+RUNTIME_DATA = "input_text.peak_efficiency_runtime_data"
+FORECAST_DATA = "input_text.peak_efficiency_forecast_summary"
 
 
 @dataclass
@@ -226,13 +228,14 @@ class PeakEfficiency(hass.Hass):
         climate = climate_state.climate
         outside_temp = climate_state.outside_temp
         start_temp = climate_state.start_temp
-        current = self.get_state(climate, attribute="current_temperature")
+        
+        end_temp = self.get_state(climate, attribute="current_temperature")
         
         do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run: 
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.restore_temp)
 
-        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")    
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {end_temp}C")
 
         # Process the next entity after this one finishes
         self.process_next_zone()
@@ -293,7 +296,17 @@ class PeakEfficiency(hass.Hass):
         pass
 
 
+@dataclass
+class ForecastSummaryData:
+    min_forecast_temp_overnight: float
+    avg_forecast_temp_overnight: float
+    avg_humidity_overnight: float
+    avg_radiation_overnight: float
+    duration_below_zero: int
+    hour_of_min_temp: int   
+
 class ForecastSummary:
+    
     def __init__(self, app, lat, lon):
         self.app = app
         self.lat = lat
@@ -410,8 +423,51 @@ class ForecastSummary:
             if hour >= 20 or hour <= 8: # 8 PM to 8 AM
                 overnight.append((t, temp, rh, rad))
         return overnight
+    
+    def save_forecast_summary(self):
+        """
+        Save the forecast summary to an input_text entity.
+        Raises an error if the input_text entity is not empty.
+        """
+        #get summary
+        summary = self.summarize()
+        if not summary:
+            self.log("No summary data available to save.")
+            return
+        # Convert the summary to a JSON string
+        summary_json = json.dumps(summary, default=lambda o: o.__dict__, indent=4)
+        # Check if the input_text entity is empty
+        current_value = self.get_state(FORECAST_DATA)
+        if current_value != "":
+            raise ValueError(f"Cannot save forecast summary to {{FORECAST_DATA}}: it is not empty, got {current_value}")
+        try:
+            # Save the summary to the input_text entity
+            self.call_service("input_text/set_value", entity_id=FORECAST_DATA, value=summary_json)
+            self.log(f"Forecast summary saved to {{FORECAST_DATA}}: {summary_json}", level="DEBUG")
+        except Exception as e:
+            self.error(f"Failed to save forecast summary to {{FORECAST_DATA}}: {e}")
+            raise
 
-    def summarize(self):
+        
+    def get_forecast_summary(self, clear_after_reading=True) -> dict:
+        """
+        Retrieve and decode the forecast summary from an input_text entity.
+        """
+        try:
+            raw_summary = self.get_state(FORECAST_DATA)
+            if not raw_summary:
+                raise ValueError(f"Summary in {{FORECAST_DATA}} is empty or unavailable.")
+            if clear_after_reading:
+                self.clear_forecast_summary()
+            return json.loads(raw_summary)
+        except json.JSONDecodeError as e:
+            self.error(f"Failed to decode summary from {{FORECAST_DATA}}: {e}")
+            raise
+        except Exception as e:
+            self.error(f"Unexpected error while retrieving summary from {{FORECAST_DATA}}: {e}")
+            raise        
+
+    def summarize(self) -> ForecastSummaryData:
         overnight = self._filter_overnight_hours(self.forecast_data)
 
         if not overnight:
@@ -434,11 +490,11 @@ class ForecastSummary:
         min_temp_time = overnight[min_temp_index][0]
         min_temp_hour = datetime.fromisoformat(min_temp_time).hour
 
-        return {
-            "min_forecast_temp_overnight": min_temp,
-            "avg_forecast_temp_overnight": avg_temp,
-            "avg_humidity_overnight": avg_humidity,
-            "avg_radiation_overnight": avg_radiation,
-            "duration_below_zero": duration_below_zero,
-            "hour_of_min_temp": min_temp_hour
-        }
+        return ForecastSummaryData(
+            min_forecast_temp_overnight=min_temp,
+            avg_forecast_temp_overnight=avg_temp,
+            avg_humidity_overnight=avg_humidity,
+            avg_radiation_overnight=avg_radiation,
+            duration_below_zero=duration_below_zero,
+            hour_of_min_temp=min_temp_hour
+        )
