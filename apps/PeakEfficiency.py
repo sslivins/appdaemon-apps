@@ -120,16 +120,16 @@ class PeakEfficiency(hass.Hass):
         
         self.log(f"PeakEfficiency initialized.")
         
-    def schedule_energy_soak_run(self,entity=None, attribute=None, old=None, new=None, kwargs=None):
+    def schedule_energy_soak_run(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
         
-        forecastSummary = ForecastSummary(self, self.latitude, self.longitude)
-        
         if self.latitude is not None and self.longitude is not None:
-            # forecast = forecastSummary.get_hourly_forecast(self.latitude, self.longitude, hours=24)
+            forecastSummary = ForecastSummary(self, self.latitude, self.longitude)
             
-            # for f_time, f_temp, f_humidity, f_radiation in forecast:
-            #     self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
+            forecast = forecastSummary.get_forecast_data()
+            
+            for f_time, f_temp, f_humidity, f_radiation in forecast:
+                self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
             
             #get total run time of heat_durations
             total_run_time = sum(self.heat_durations.values()) / 60  # convert to minutes
@@ -285,9 +285,15 @@ class ForecastSummary:
         self.app = app
         self.lat = lat
         self.lon = lon
-        self.forecast_data = self.get_hourly_forecast(lat, lon, hours=24)
+        self.forecast_data = self._get_hourly_forecast(lat, lon, hours=24)
         
-    def get_hourly_forecast(self, lat, lon, hours=6):
+    def get_forecast_data(self):
+        """
+        Returns the forecast data.
+        """
+        return self.forecast_data
+        
+    def _get_hourly_forecast(self, lat, lon, hours=6):
         
         #calculate forecast days based on hours
         forecast_days = math.ceil(hours / 24)
