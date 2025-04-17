@@ -392,6 +392,7 @@ class ForecastSummary:
 
             #find the max sum of the block but must be after current time and cannot exceed current day
             if window[0][0] < datetime.now() or window[-1][0] > datetime.now() + timedelta(days=1):
+                self.app.log(f"Skipping window {window} as it is not within the current day or starts in the past. ({datetime.now()} < {window[0][0]}", level="DEBUG")
                 continue
             
             if temp_sum > max_sum:
