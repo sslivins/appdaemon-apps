@@ -8,6 +8,7 @@ import requests
 import math
 import statistics
 
+DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
 DEFAULT_RUN_AT_TIME = time(15, 0, 0)  # Default run time is 3 PM
 DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
@@ -119,7 +120,7 @@ class PeakEfficiency(hass.Hass):
         
         #run manually and then run the scheduler daily to figure when the best time to run override based on the weather forecast
         self.schedule_energy_soak_run()
-        self.run_daily(self.schedule_energy_soak_run, time(12, 0, 0))
+        self.run_daily(self.schedule_energy_soak_run, DAILY_SCHEDULE_SOAK_RUN)
         
         self.log(f"PeakEfficiency initialized.")
         
