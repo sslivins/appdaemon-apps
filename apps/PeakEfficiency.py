@@ -154,7 +154,7 @@ class PeakEfficiency(hass.Hass):
             self.cancel_timer(self.schedule_handle)
             
         #only run this while in away mode
-        if self._is_away_mode_enabled() and not self._is_peak_efficiency_disabled():
+        if self._is_away_mode_enabled():
             self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
       
             run_at_am_pm = run_at.strftime("%I:%M %p")
@@ -162,8 +162,6 @@ class PeakEfficiency(hass.Hass):
         else:
             if not self._is_away_mode_enabled():
                 self.log("PeakEfficiency will not run today because away mode is not enabled.", level="INFO")
-            elif self._is_peak_efficiency_disabled():
-                self.log("PeakEfficiency will not run today because it is disabled.", level="INFO")
 
     def safe_get_float(self, entity_id, default):
         try:
@@ -193,6 +191,11 @@ class PeakEfficiency(hass.Hass):
         
 
     def start_heat_soak(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
+
+        if self._is_peak_efficiency_disabled():
+            self.log("Peak Efficiency is disabled, not starting heat soak.", level="INFO")
+            return
+
         # Create a queue of entities that are in heat mode
         self.active_queue = [e for e in self.full_entity_list if self.get_state(e) == "heat"]
 
