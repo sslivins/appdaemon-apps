@@ -23,6 +23,7 @@ OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
 AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
 AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
 AWAY_MODE_ENABLED = "input_boolean.home_away_mode_enabled"
+PEAK_EFFICIENCY_DISABLED = "input_boolean.peak_efficiency_disabled"
 
 
 @dataclass
@@ -153,13 +154,16 @@ class PeakEfficiency(hass.Hass):
             self.cancel_timer(self.schedule_handle)
             
         #only run this while in away mode
-        if self._is_away_mode_enabled():
+        if self._is_away_mode_enabled() and not self._is_peak_efficiency_disabled():
             self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
       
             run_at_am_pm = run_at.strftime("%I:%M %p")
             self.log(f"PeakEfficiency will run today at {run_at_am_pm}.", level="INFO")
         else:
-            self.log(f"PeakEfficiency will not run today because Away Mode is not enabled.", level="INFO")
+            if not self._is_away_mode_enabled():
+                self.log("PeakEfficiency will not run today because away mode is not enabled.", level="INFO")
+            elif self._is_peak_efficiency_disabled():
+                self.log("PeakEfficiency will not run today because it is disabled.", level="INFO")
 
     def safe_get_float(self, entity_id, default):
         try:
@@ -288,6 +292,12 @@ class PeakEfficiency(hass.Hass):
         Check if the home/away mode is enabled.
         """
         return self.get_state(AWAY_MODE_ENABLED) == "on"
+    
+    def _is_peak_efficiency_disabled(self):
+        """
+        Check if the peak efficiency is disabled.
+        """
+        return self.get_state(PEAK_EFFICIENCY_DISABLED) == "on"
         
     def terminate(self):
         #not using this for now
