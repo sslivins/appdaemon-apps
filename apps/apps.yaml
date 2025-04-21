@@ -1,5 +1,5 @@
 Peak_Efficiency:
-  module: PeakEfficiency
+  module: PeakEfficiency.main
   class: PeakEfficiency
   log_level: DEBUG
   latitude: 50.88171971069347
