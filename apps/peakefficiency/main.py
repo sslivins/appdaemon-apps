@@ -4,8 +4,8 @@ from datetime import timedelta
 import json
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
-from .forecast import ForecastSummary
-from .utils import HelperUtils
+from forecast import ForecastSummary
+from utils import HelperUtils
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
