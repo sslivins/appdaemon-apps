@@ -110,7 +110,7 @@ class ForecastSummary:
 
         #if the best time is in the past then return None
         if best_start_time is not None and best_start_time < datetime.now():
-            self.app.log("Best start time has passed")
+            self.app.log(f"Best start time is {best_start_time}, which has passed")
             return None, block_size
 
         return best_start_time, block_size          

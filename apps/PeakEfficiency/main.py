@@ -130,6 +130,8 @@ class PeakEfficiency(hass.Hass):
     def schedule_energy_soak_run(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
         
+        run_at = DEFAULT_RUN_AT_TIME
+        
         if self.latitude is not None and self.longitude is not None:
             forecastSummary = ForecastSummary(self, self.latitude, self.longitude)
             
@@ -148,9 +150,7 @@ class PeakEfficiency(hass.Hass):
             run_at = best_start_time.time() if best_start_time else run_at
         else:
             self.log("Latitude and longitude not set, using default run time.", level="WARNING")
-            #default start time is 3pm
-            run_at = DEFAULT_RUN_AT_TIME            
-
+       
         if self.schedule_handle is not None:
             self.log(f"PeakEfficiency already scheduled for {self.schedule_handle}, cancelling it.")
             self.cancel_timer(self.schedule_handle)
