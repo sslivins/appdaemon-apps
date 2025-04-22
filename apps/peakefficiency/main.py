@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
 from forecast import ForecastSummary
 from utils import HelperUtils
+from diskcache import Cache
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
@@ -19,6 +20,7 @@ RESTORE_TEMPERATURE_TIMER = "timer.peak_efficiency_retore_temperature"
 MANUAL_START = "input_boolean.start_peak_efficiency"
 DRY_RUN = "input_boolean.peak_efficiency_dry_run"
 CLIMATE_STATE = "input_text.peakefficiency_restore_state"
+ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
 OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
 AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
 AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
@@ -58,7 +60,7 @@ class PeakEfficiency(hass.Hass):
         #make sure helpers exist, otherwise error out
         #check if the timer exists
         hu.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
-        hu.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
+        #hu.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
         hu.assert_entity_exists(AWAY_MODE_ENABLED, "Away Mode Enabled")
         
         hu.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start", required=False)
@@ -66,6 +68,8 @@ class PeakEfficiency(hass.Hass):
         hu.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor", required=False)
         hu.assert_entity_exists(AWAY_TARGET_TEMP, "Away Mode Target Temperature", required=False)
         hu.assert_entity_exists(AWAY_PEAK_HEAT_TO_TEMP, "Away Mode Peak Heat Temperature", required=False)
+        
+        self.cache = Cache(".cache")
         
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
@@ -226,15 +230,17 @@ class PeakEfficiency(hass.Hass):
         Save a ClimateState object to an input_text entity.
         Raises an error if the input_text entity is not empty.
         """
-        current_value = self.get_state(CLIMATE_STATE)
-        if current_value != "":
-            raise ValueError(f"Cannot save state to {{CLIMATE_STATE}}: it is not empty, got {current_value}")
+        #current_value = self.get_state(CLIMATE_STATE)
+        climate_state = self.cache.get(ZONE_STATE_KEY, default=None)
+        if not climate_state:
+            raise ValueError(f"Cannot save zone state: it is not empty, got {climate_state}")
         
         try:
-            self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value=state.to_json())
-            self.log(f"State saved to {{CLIMATE_STATE}}: {state}", level="DEBUG")
+            #self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value=state.to_json())
+            self.cache.set(ZONE_STATE_KEY, state.to_json())
+            self.log(f"State saved: {state}", level="DEBUG")
         except Exception as e:
-            self.error(f"Failed to save state to {{CLIMATE_STATE}}: {e}")
+            self.error(f"Failed to save zone state: {e}")
             raise
 
     def get_climate_state(self, clear_after_reading=True) -> ClimateState:
@@ -242,30 +248,19 @@ class PeakEfficiency(hass.Hass):
         Retrieve and decode the state from an input_text entity as a ClimateState object.
         """
         try:
-            raw_state = self.get_state(CLIMATE_STATE)
+            raw_state = self.cache.get(ZONE_STATE_KEY, default=None)
             if not raw_state:
-                raise ValueError(f"State in {{CLIMATE_STATE}} is empty or unavailable.")
+                raise ValueError(f"zone state is empty or unavailable.")
             if clear_after_reading:
-                self.clear_climate_state()
+                self.cache.delete(ZONE_STATE_KEY)
             return ClimateState.from_json(raw_state)
         except json.JSONDecodeError as e:
-            self.error(f"Failed to decode state from {{CLIMATE_STATE}}: {e}")
+            self.error(f"Failed to decode zone state: {e}")
             raise
         except Exception as e:
-            self.error(f"Unexpected error while retrieving state from {{CLIMATE_STATE}}: {e}")
+            self.error(f"Unexpected error while retrieving zone state: {e}")
             raise
 
-    def clear_climate_state(self):
-        """
-        Clear the state in an input_text entity by calling save_state with an empty ClimateState.
-        """
-        try:
-            self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value="")
-            self.log(f"State cleared for {{CLIMATE_STATE}}", level="DEBUG")
-        except Exception as e:
-            self.error(f"Failed to clear state for {{CLIMATE_STATE}}: {e}")
-            raise
-        
     def _is_away_mode_enabled(self):
         """
         Check if the home/away mode is enabled.
