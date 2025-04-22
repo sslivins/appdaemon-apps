@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict, fields
 from forecast import ForecastSummary
 from utils import HelperUtils
 from diskcache import Cache
+import os
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
@@ -69,7 +70,9 @@ class PeakEfficiency(hass.Hass):
         hu.assert_entity_exists(AWAY_TARGET_TEMP, "Away Mode Target Temperature", required=False)
         hu.assert_entity_exists(AWAY_PEAK_HEAT_TO_TEMP, "Away Mode Peak Heat Temperature", required=False)
         
-        self.cache = Cache("cache")
+        cache_dir = os.path.join(os.path.dirname(__file__), "cache")
+        self.log(f"Cache directory: {cache_dir}", level="DEBUG")
+        self.cache = Cache(cache_dir)
         
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
