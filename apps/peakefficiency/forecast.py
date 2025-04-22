@@ -1,8 +1,32 @@
 from datetime import datetime, timezone
+from dataclasses import dataclass, asdict, fields
 import requests
 import math
 import statistics
 import json
+
+@dataclass
+class ForecastDailySummary:
+    forcast_start_time: datetime
+    forcast_end_time: datetime
+    latitude: float
+    longitude: float
+    min_forecast_temp_overnight: float
+    avg_forecast_temp_overnight: float
+    avg_humidity_overnight: float
+    avg_radiation_overnight: float
+    duration_below_zero: int
+    hour_of_min_temp: int
+    
+    def to_json(self):
+        """Convert the dataclass to a JSON string."""
+        return json.dumps(asdict(self))
+
+    @staticmethod
+    def from_json(json_str):
+        """Create a ClimateState instance from a JSON string."""
+        data = json.loads(json_str)
+        return ForecastDailySummary(**data)    
 
 class ForecastSummary:
     def __init__(self, app, lat, lon):
@@ -149,12 +173,16 @@ class ForecastSummary:
         min_temp_index = temps.index(min_temp)
         min_temp_time = overnight[min_temp_index][0]
         min_temp_hour = datetime.fromisoformat(min_temp_time).hour
-
-        return {
-            "min_forecast_temp_overnight": min_temp,
-            "avg_forecast_temp_overnight": avg_temp,
-            "avg_humidity_overnight": avg_humidity,
-            "avg_radiation_overnight": avg_radiation,
-            "duration_below_zero": duration_below_zero,
-            "hour_of_min_temp": min_temp_hour
-        }
+        
+        return ForecastDailySummary(
+            forcast_start_time=overnight[0][0],
+            forcast_end_time=overnight[-1][0],
+            latitude=self.lat,
+            longitude=self.lon,
+            min_forecast_temp_overnight=min_temp,
+            avg_forecast_temp_overnight=avg_temp,
+            avg_humidity_overnight=avg_humidity,
+            avg_radiation_overnight=avg_radiation,
+            duration_below_zero=duration_below_zero,
+            hour_of_min_temp=min_temp_hour
+        )

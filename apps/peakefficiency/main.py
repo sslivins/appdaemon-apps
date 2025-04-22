@@ -4,10 +4,11 @@ from datetime import timedelta
 import json
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
-from forecast import ForecastSummary
+from forecast import ForecastSummary, ForecastDailySummary
 from utils import HelperUtils
 from diskcache import Cache
 import os
+from typing import List, Dict
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
@@ -20,14 +21,13 @@ DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
 RESTORE_TEMPERATURE_TIMER = "timer.peak_efficiency_retore_temperature"
 MANUAL_START = "input_boolean.start_peak_efficiency"
 DRY_RUN = "input_boolean.peak_efficiency_dry_run"
-CLIMATE_STATE = "input_text.peakefficiency_restore_state"
-ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
 OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
 AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
 AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
 AWAY_MODE_ENABLED = "input_boolean.home_away_mode_enabled"
 PEAK_EFFICIENCY_DISABLED = "input_boolean.peak_efficiency_disabled"
 
+ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
 
 @dataclass
 class ClimateState:
@@ -45,6 +45,56 @@ class ClimateState:
         data = json.loads(json_str)
         return ClimateState(**data)
     
+@dataclass
+class ZoneSummary:
+    zone: str
+    start_time: datetime
+    duration: int
+    start_temp: float
+    outside_temp: float #taken at start
+    end_temp: float = None
+    end_temp_30min: float = None
+    end_temp_60min: float = None
+
+    
+@dataclass
+class DailySummary:
+    date: datetime
+    forecast: ForecastDailySummary
+    zones: Dict[str, ZoneSummary] = None  # List of ZoneSummary objects
+    
+    def to_json(self):
+        """Convert the dataclass to a JSON string."""
+        return json.dumps(asdict(self))
+
+    @staticmethod
+    def from_json(json_str):
+        """Create a DailySummary instance from a JSON string."""
+        data = json.loads(json_str)
+        return DailySummary(**data)
+    
+    #method to save to cache
+    def save_to_cache(self, cache: Cache):
+        try:
+            cache.set("daily_summary", self.to_json())
+            return True
+        except Exception as e:
+            print(f"Error saving to cache: {e}")
+            
+        return False
+    
+    #method to load from cache
+    @staticmethod
+    def load_from_cache(cache: Cache):
+        try:
+            raw_data = cache.get("daily_summary")
+            if raw_data:
+                return DailySummary.from_json(raw_data)
+        except Exception as e:
+            print(f"Error loading from cache: {e}")
+            
+        return None
+    
 class PeakEfficiency(hass.Hass):
 
     def initialize(self):
@@ -61,7 +111,6 @@ class PeakEfficiency(hass.Hass):
         #make sure helpers exist, otherwise error out
         #check if the timer exists
         hu.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
-        #hu.assert_entity_exists(CLIMATE_STATE, "Peak Efficiency Climate State Buffer")
         hu.assert_entity_exists(AWAY_MODE_ENABLED, "Away Mode Enabled")
         
         hu.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start", required=False)
@@ -88,7 +137,7 @@ class PeakEfficiency(hass.Hass):
 
         self.full_entity_list = list(self.heat_durations.keys())
         self.active_queue = []  # Will store entities to run
-
+        
         # Optional trigger
         self.listen_state(self.start_heat_soak, MANUAL_START, new="on")
 
@@ -137,6 +186,12 @@ class PeakEfficiency(hass.Hass):
     def schedule_energy_soak_run(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
         
+        self.daily_summary = DailySummary(
+            date=datetime.now().strftime("%Y-%m-%d"),
+            forecast=None
+        )
+        self.daily_summary.save_to_cache(self.cache)
+        
         run_at = DEFAULT_RUN_AT_TIME
         
         if self.latitude is not None and self.longitude is not None:
@@ -155,6 +210,10 @@ class PeakEfficiency(hass.Hass):
             self.log(f"Best start time based on weather forecast is: {best_start_time}", level="INFO")
             
             run_at = best_start_time.time() if best_start_time else run_at
+            
+            #get summarized data and save to cache
+            self.daily_summary.forecast = forecastSummary.summarize()
+            self.daily_summary.save_to_cache(self.cache)
         else:
             self.log("Latitude and longitude not set, using default run time.", level="WARNING")
        
@@ -208,6 +267,18 @@ class PeakEfficiency(hass.Hass):
         current_temp = self.get_state(climate, attribute="current_temperature")
 
         self.save_climate_state(ClimateState(climate=climate, outside_temp=outside_temp, start_temp=current_temp))
+        
+        zone_summary = ZoneSummary(
+            zone=climate,
+            start_time=datetime.now(),
+            duration=heat_duration,
+            start_temp=current_temp,
+            outside_temp=outside_temp
+        )
+        
+        self.daily_summary.zones[climate] = zone_summary
+        self.daily_summary.save_to_cache(self.cache)
+        
         self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
         
     def stop_heat_soak(self, event_name, data, kwargs):
@@ -223,7 +294,18 @@ class PeakEfficiency(hass.Hass):
         if not do_dry_run: 
             self.call_service("climate/set_temperature", entity_id=climate, temperature=self.restore_temp)
 
-        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")    
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")  
+        
+        zone_summary = ZoneSummary(
+            zone=climate,
+            start_time=datetime.now(),
+            duration=heat_duration,
+            start_temp=current_temp,
+            outside_temp=outside_temp
+        )
+        
+        self.daily_summary.zones[climate] = zone_summary
+        self.daily_summary.save_to_cache(self.cache)  
 
         # Process the next entity after this one finishes
         self.process_next_zone()
@@ -233,13 +315,11 @@ class PeakEfficiency(hass.Hass):
         Save a ClimateState object to an input_text entity.
         Raises an error if the input_text entity is not empty.
         """
-        #current_value = self.get_state(CLIMATE_STATE)
         climate_state = self.cache.get(ZONE_STATE_KEY, default=None)
         if climate_state is not None:
             raise ValueError(f"Cannot save zone state: it is not empty, got {climate_state}")
         
         try:
-            #self.call_service("input_text/set_value", entity_id=CLIMATE_STATE, value=state.to_json())
             self.cache.set(ZONE_STATE_KEY, state.to_json())
             self.log(f"State saved: {state}", level="DEBUG")
         except Exception as e:
