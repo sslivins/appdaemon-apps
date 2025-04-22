@@ -232,7 +232,7 @@ class PeakEfficiency(hass.Hass):
         """
         #current_value = self.get_state(CLIMATE_STATE)
         climate_state = self.cache.get(ZONE_STATE_KEY, default=None)
-        if not climate_state:
+        if climate_state is not None:
             raise ValueError(f"Cannot save zone state: it is not empty, got {climate_state}")
         
         try:
