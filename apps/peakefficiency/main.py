@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
 from forecast import ForecastSummary, ForecastDailySummary
 from utils import HelperUtils
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from diskcache import Cache
 from typing import Type, TypeVar
 import os
@@ -55,6 +55,8 @@ class PersistentBase(BaseModel):
     _cache = Cache(CACHE_PATH)
     _cache_key: str = ""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)  
+
     def save(self):
         data = self.dict()
         self._cache.set(self._cache_key, data)
@@ -90,15 +92,30 @@ class ZoneSummary(BaseModel):
     end_temp: Optional[float] = None
     end_temp_30min: Optional[float] = None
     end_temp_60min: Optional[float] = None
-
     
 class DailySummary(PersistentBase):
-    date: Optional[datetime]
-    forecast: Optional[ForecastDailySummary] 
+    date: Optional[datetime] = None
+    forecast: Optional[ForecastDailySummary] = None
     zones: Optional[Dict[str, ZoneSummary]] = {}
+
+    def __init__(self, cache_key: str = "", **data):
+        super().__init__(**data)
+        self._cache_key = cache_key
     
     
 class PeakEfficiency(hass.Hass, PersistentBase):
+
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    schedule_handle: Optional[str] = None
+    cache: Optional[Cache] = None
+    summary: Optional[DailySummary] = None
+    restore_temp: Optional[float] = None
+    heat_to_temp: Optional[float] = None
+    active_queue: List[str] = []  # Will store entities to run
+    full_entity_list: List[str] = []  # Will store all entities to run
+    heat_durations: Dict[str, int] = {}  # Will store custom heating durations for each zone
+    
 
     def initialize(self):
         
@@ -126,7 +143,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
         cache_dir = os.path.join(os.path.dirname(__file__), "cache")
         self.log(f"Cache directory: {cache_dir}", level="DEBUG")
         self.cache = Cache(cache_dir)
-        self.summary = DailySummary("daily:summary")
+        self.summary = DailySummary(cache_key="daily:summary")
         
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)

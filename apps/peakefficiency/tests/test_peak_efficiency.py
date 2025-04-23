@@ -5,10 +5,23 @@ import os
 from datetime import datetime
 import pytest
 from unittest.mock import MagicMock
+import hassapi as hass
+from pydantic import BaseModel
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from main import PeakEfficiency, ClimateState, ZoneSummary, DailySummary
+
+from main import (
+    RESTORE_TEMPERATURE_TIMER,
+    MANUAL_START,
+    DRY_RUN,
+    OUTDOOR_TEMPERATURE_SENSOR,
+    AWAY_TARGET_TEMP,
+    AWAY_PEAK_HEAT_TO_TEMP,
+    AWAY_MODE_ENABLED,
+    PEAK_EFFICIENCY_DISABLED,
+)
 
 os.environ["HASS_URL"] = "http://mock-hass-url"
 os.environ["HASS_TOKEN"] = "mock-token"
@@ -16,27 +29,44 @@ os.environ["HASS_TOKEN"] = "mock-token"
 class MockPeakEfficiency(PeakEfficiency):
     def __init__(self):
         # Don't call Hass.__init__ or AppDaemon-related setup
-        super().__init__()
-        object.__setattr__(self, "log", print)
+        BaseModel.__init__(self)
+        object.__setattr__(self, "log", MagicMock(side_effect=self._mock_print))
         object.__setattr__(self, "get_state", MagicMock(side_effect=self._mock_get_state))
         object.__setattr__(self, "call_service", MagicMock())
         object.__setattr__(self, "listen_state", MagicMock())
         object.__setattr__(self, "listen_event", MagicMock())
         object.__setattr__(self, "run_daily", MagicMock())
         object.__setattr__(self, "cancel_timer", MagicMock())
-        object.__setattr__(self, "args", {})
-        self.heat_to_temp = 19.5
-        self.restore_temp = 13
-        self.summary = DailySummary.load("test:summary")
-        self.active_queue = []
+        object.__setattr__(self, "args", {"latitude": 50.88171971069347, "longitude": -119.89710569337053})
 
     def _assert_api_running(self):
         # Override to do nothing in the mock
-        pass        
+        pass
+
+    def _mock_print(self, message, level="INFO"):
+        print(f"{level}: {message}")
 
     def _mock_get_state(self, entity, attribute=None):
-        if attribute == "current_temperature":
-            return 18.3
+        if entity == RESTORE_TEMPERATURE_TIMER:
+            if attribute is None:
+                return ""
+        
+        elif entity == MANUAL_START:
+            return "on"
+        elif entity == DRY_RUN:
+            return "off"
+        elif entity == OUTDOOR_TEMPERATURE_SENSOR:
+            return "15.0"
+        elif entity == AWAY_TARGET_TEMP:
+            return "13.5"
+        elif entity == AWAY_PEAK_HEAT_TO_TEMP:
+            return "20.0"
+        elif entity == AWAY_MODE_ENABLED:
+            return "on"
+        elif entity == PEAK_EFFICIENCY_DISABLED:
+            return "off"
+        elif entity.startswith("climate.") and attribute == "current_temperature":
+            return "20.0"
         return "heat"
 
     def save_climate_state(self, state: ClimateState):
@@ -53,7 +83,7 @@ class MockPeakEfficiency(PeakEfficiency):
 @pytest.fixture
 def app():
     app = MockPeakEfficiency()
-    app.summary.clear()
+    app.initialize()
     return app
 
 def test_process_next_zone(app):
