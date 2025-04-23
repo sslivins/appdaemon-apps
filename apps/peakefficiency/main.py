@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
 from forecast import ForecastSummary, ForecastDailySummary
 from utils import HelperUtils
+from pydantic import BaseModel
 from diskcache import Cache
+from typing import Type, TypeVar
 import os
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
@@ -27,6 +29,8 @@ AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
 AWAY_MODE_ENABLED = "input_boolean.home_away_mode_enabled"
 PEAK_EFFICIENCY_DISABLED = "input_boolean.peak_efficiency_disabled"
 
+
+CACHE_PATH = os.path.join(os.path.dirname(__file__), "cache")
 ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
 
 @dataclass
@@ -45,57 +49,56 @@ class ClimateState:
         data = json.loads(json_str)
         return ClimateState(**data)
     
-@dataclass
-class ZoneSummary:
-    zone: str
-    start_time: datetime
-    duration: int
-    start_temp: float
-    outside_temp: float #taken at start
-    end_temp: float = None
-    end_temp_30min: float = None
-    end_temp_60min: float = None
+T = TypeVar("T", bound="PersistentBase")
+
+class PersistentBase(BaseModel):
+    _cache = Cache(CACHE_PATH)
+    _cache_key: str = ""
+
+    def save(self):
+        data = self.dict()
+        self._cache.set(self._cache_key, data)
+
+    @classmethod
+    def load(cls: Type[T], cache_key: str) -> T:
+        data = cls._cache.get(cache_key)
+        if data:
+            obj = cls(**data)
+        else:
+            obj = cls()
+        obj._cache_key = cache_key
+        return obj
+
+    def clear(self):
+        self._cache.delete(self._cache_key)
+
+    def print_cache_contents(self):
+        """
+        Print the entire contents of the cache as JSON objects.
+        """
+        self.log("Cache contents:")
+        for key in self._cache.iterkeys():
+            value = self._cache.get(key)
+            self.log(f"Key: {key}, Value: {json.dumps(value, indent=2)}")
+    
+class ZoneSummary(BaseModel):
+    zone: Optional[str] = None
+    start_time: Optional[datetime] = None
+    duration: Optional[int] = None
+    start_temp: Optional[float] = None
+    outside_temp: Optional[float] = None  # taken at start
+    end_temp: Optional[float] = None
+    end_temp_30min: Optional[float] = None
+    end_temp_60min: Optional[float] = None
 
     
-@dataclass
-class DailySummary:
-    date: datetime
-    forecast: ForecastDailySummary
-    zones: Dict[str, ZoneSummary] = None  # List of ZoneSummary objects
+class DailySummary(PersistentBase):
+    date: Optional[datetime]
+    forecast: Optional[ForecastDailySummary] 
+    zones: Optional[Dict[str, ZoneSummary]] = {}
     
-    def to_json(self):
-        """Convert the dataclass to a JSON string."""
-        return json.dumps(asdict(self))
-
-    @staticmethod
-    def from_json(json_str):
-        """Create a DailySummary instance from a JSON string."""
-        data = json.loads(json_str)
-        return DailySummary(**data)
     
-    #method to save to cache
-    def save_to_cache(self, cache: Cache):
-        try:
-            cache.set("daily_summary", self.to_json())
-            return True
-        except Exception as e:
-            print(f"Error saving to cache: {e}")
-            
-        return False
-    
-    #method to load from cache
-    @staticmethod
-    def load_from_cache(cache: Cache):
-        try:
-            raw_data = cache.get("daily_summary")
-            if raw_data:
-                return DailySummary.from_json(raw_data)
-        except Exception as e:
-            print(f"Error loading from cache: {e}")
-            
-        return None
-    
-class PeakEfficiency(hass.Hass):
+class PeakEfficiency(hass.Hass, PersistentBase):
 
     def initialize(self):
         
@@ -119,9 +122,11 @@ class PeakEfficiency(hass.Hass):
         hu.assert_entity_exists(AWAY_TARGET_TEMP, "Away Mode Target Temperature", required=False)
         hu.assert_entity_exists(AWAY_PEAK_HEAT_TO_TEMP, "Away Mode Peak Heat Temperature", required=False)
         
+        
         cache_dir = os.path.join(os.path.dirname(__file__), "cache")
         self.log(f"Cache directory: {cache_dir}", level="DEBUG")
         self.cache = Cache(cache_dir)
+        self.summary = DailySummary("daily:summary")
         
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
@@ -186,11 +191,9 @@ class PeakEfficiency(hass.Hass):
     def schedule_energy_soak_run(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
         
-        self.daily_summary = DailySummary(
-            date=datetime.now().strftime("%Y-%m-%d"),
-            forecast=None
-        )
-        self.daily_summary.save_to_cache(self.cache)
+        self.summary.clear()
+        self.summary.date = datetime.now()
+        self.summary.save()
         
         run_at = DEFAULT_RUN_AT_TIME
         
@@ -211,9 +214,6 @@ class PeakEfficiency(hass.Hass):
             
             run_at = best_start_time.time() if best_start_time else run_at
             
-            #get summarized data and save to cache
-            self.daily_summary.forecast = forecastSummary.summarize()
-            self.daily_summary.save_to_cache(self.cache)
         else:
             self.log("Latitude and longitude not set, using default run time.", level="WARNING")
        
@@ -251,6 +251,7 @@ class PeakEfficiency(hass.Hass):
     def process_next_zone(self, kwargs=None):
         if not self.active_queue:
             self.log("All climate entities have been processed.")
+            self.summary.print_cache_contents()
             return
 
         climate = self.active_queue.pop(0)
@@ -276,8 +277,8 @@ class PeakEfficiency(hass.Hass):
             outside_temp=outside_temp
         )
         
-        self.daily_summary.zones[climate] = zone_summary
-        self.daily_summary.save_to_cache(self.cache)
+        self.summary.zones[climate] = zone_summary
+        self.summary.save()
         
         self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
         
@@ -297,15 +298,11 @@ class PeakEfficiency(hass.Hass):
         self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")  
         
         zone_summary = ZoneSummary(
-            zone=climate,
-            start_time=datetime.now(),
-            duration=heat_duration,
-            start_temp=current_temp,
-            outside_temp=outside_temp
+            end_temp=current,
         )
         
-        self.daily_summary.zones[climate] = zone_summary
-        self.daily_summary.save_to_cache(self.cache)  
+        self.summary.zones[climate] = zone_summary
+        self.summary.save()
 
         # Process the next entity after this one finishes
         self.process_next_zone()

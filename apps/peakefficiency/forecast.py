@@ -4,29 +4,21 @@ import requests
 import math
 import statistics
 import json
+from pydantic import BaseModel
+from typing import Optional
 
-@dataclass
-class ForecastDailySummary:
-    forcast_start_time: datetime
-    forcast_end_time: datetime
-    latitude: float
-    longitude: float
-    min_forecast_temp_overnight: float
-    avg_forecast_temp_overnight: float
-    avg_humidity_overnight: float
-    avg_radiation_overnight: float
-    duration_below_zero: int
-    hour_of_min_temp: int
+class ForecastDailySummary(BaseModel):
+    forcast_start_time: Optional[datetime]
+    forcast_end_time: Optional[datetime]
+    latitude: Optional[float]
+    longitude: Optional[float]
+    min_forecast_temp_overnight: Optional[float]
+    avg_forecast_temp_overnight: Optional[float]
+    avg_humidity_overnight: Optional[float]
+    avg_radiation_overnight: Optional[float]
+    duration_below_zero: Optional[int]
+    hour_of_min_temp: Optional[int]
     
-    def to_json(self):
-        """Convert the dataclass to a JSON string."""
-        return json.dumps(asdict(self))
-
-    @staticmethod
-    def from_json(json_str):
-        """Create a ClimateState instance from a JSON string."""
-        data = json.loads(json_str)
-        return ForecastDailySummary(**data)    
 
 class ForecastSummary:
     def __init__(self, app, lat, lon):
