@@ -58,7 +58,7 @@ class PersistentBase(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)  
 
     def save(self):
-        data = self.dict()
+        data = self.model_dump()
         self._cache.set(self._cache_key, data)
 
     @classmethod
@@ -74,14 +74,14 @@ class PersistentBase(BaseModel):
     def clear(self):
         self._cache.delete(self._cache_key)
 
-    def print_cache_contents(self):
+    def print_cache_contents(self, logger):
         """
         Print the entire contents of the cache as JSON objects.
         """
-        self.log("Cache contents:")
+        logger("Cache contents:")
         for key in self._cache.iterkeys():
             value = self._cache.get(key)
-            self.log(f"Key: {key}, Value: {json.dumps(value, indent=2)}")
+            logger(f"Key: {key}, Value: {json.dumps(value, indent=2, default=str)}")
     
 class ZoneSummary(BaseModel):
     zone: Optional[str] = None
@@ -115,6 +115,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
     active_queue: List[str] = []  # Will store entities to run
     full_entity_list: List[str] = []  # Will store all entities to run
     heat_durations: Dict[str, int] = {}  # Will store custom heating durations for each zone
+    all_zones_processed: bool = False  # Flag to check if all zones have been processed
     
 
     def initialize(self):
@@ -127,6 +128,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             
         hu = HelperUtils(self)
         
+        self.all_zones_processed = False
         self.schedule_handle = None
         #make sure helpers exist, otherwise error out
         #check if the timer exists
@@ -230,6 +232,9 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             self.log(f"Best start time based on weather forecast is: {best_start_time}", level="INFO")
             
             run_at = best_start_time.time() if best_start_time else run_at
+
+            self.summary.forecast = forecastSummary.summarize()
+            self.summary.save()
             
         else:
             self.log("Latitude and longitude not set, using default run time.", level="WARNING")
@@ -241,6 +246,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
         #only run this while in away mode
         if self._is_away_mode_enabled():
             self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
+            self.all_zones_processed = False
       
             run_at_am_pm = run_at.strftime("%I:%M %p")
             self.log(f"PeakEfficiency will run today at {run_at_am_pm}.", level="INFO")
@@ -268,7 +274,8 @@ class PeakEfficiency(hass.Hass, PersistentBase):
     def process_next_zone(self, kwargs=None):
         if not self.active_queue:
             self.log("All climate entities have been processed.")
-            self.summary.print_cache_contents()
+            self.summary.print_cache_contents(self.log)
+            self.all_zones_processed = True
             return
 
         climate = self.active_queue.pop(0)
@@ -299,13 +306,14 @@ class PeakEfficiency(hass.Hass, PersistentBase):
         
         self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
         
-    def stop_heat_soak(self, event_name, data, kwargs):
+    def stop_heat_soak(self, event_name=None, data=None, kwargs=None):
         
         climate_state = self.get_climate_state()
 
         climate = climate_state.climate
         outside_temp = climate_state.outside_temp
         start_temp = climate_state.start_temp
+
         current = self.get_state(climate, attribute="current_temperature")
         
         do_dry_run = self.get_state(DRY_RUN) == "on"
@@ -314,11 +322,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
 
         self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")  
         
-        zone_summary = ZoneSummary(
-            end_temp=current,
-        )
-        
-        self.summary.zones[climate] = zone_summary
+        self.summary.zones[climate].end_temp = float(current)
         self.summary.save()
 
         # Process the next entity after this one finishes
