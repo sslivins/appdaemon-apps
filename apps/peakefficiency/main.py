@@ -74,15 +74,7 @@ class PersistentBase(BaseModel):
     def clear(self):
         self._cache.delete(self._cache_key)
 
-    def print_cache_contents(self, logger):
-        """
-        Print the entire contents of the cache as JSON objects.
-        """
-        logger("Cache contents:")
-        for key in self._cache.iterkeys():
-            value = self._cache.get(key)
-            logger(f"Key: {key}, Value: {json.dumps(value, indent=2, default=str)}")
-    
+   
 class ZoneSummary(BaseModel):
     zone: Optional[str] = None
     start_time: Optional[datetime] = None
@@ -92,7 +84,8 @@ class ZoneSummary(BaseModel):
     end_temp: Optional[float] = None
     end_temp_30min: Optional[float] = None
     end_temp_60min: Optional[float] = None
-    
+
+
 class DailySummary(PersistentBase):
     date: Optional[datetime] = None
     forecast: Optional[ForecastDailySummary] = None
@@ -101,7 +94,18 @@ class DailySummary(PersistentBase):
     def __init__(self, cache_key: str = "", **data):
         super().__init__(**data)
         self._cache_key = cache_key
-    
+
+    def __str__(self):
+        """Provide a string representation of the DailySummary for printing."""
+        return json.dumps(
+            {
+                "date": self.date.isoformat() if self.date else None,
+                "forecast": self.forecast.model_dump() if self.forecast else None,
+                "zones": {k: v.model_dump() for k, v in self.zones.items()} if self.zones else {},
+            },
+            indent=2,
+            default=str,
+        )
     
 class PeakEfficiency(hass.Hass, PersistentBase):
 
@@ -199,7 +203,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             self.log(f"PeakEfficiency timer is active for {climate_state.climate}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
         
         #using timer helper from home assistant to restore the temperature even if home assistant reboots
-        self.listen_event(self.stop_heat_soak, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
+        self.listen_event(self.complete_zone, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
         
         #run manually and then run the scheduler daily to figure when the best time to run override based on the weather forecast
         self.schedule_energy_soak_run()
@@ -274,7 +278,10 @@ class PeakEfficiency(hass.Hass, PersistentBase):
     def process_next_zone(self, kwargs=None):
         if not self.active_queue:
             self.log("All climate entities have been processed.")
-            self.summary.print_cache_contents(self.log)
+            #self.summary.print_cache_contents(self.log)
+
+            self.log(f"Cache contents: {self.summary}")
+
             self.all_zones_processed = True
             return
 
@@ -306,7 +313,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
         
         self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
         
-    def stop_heat_soak(self, event_name=None, data=None, kwargs=None):
+    def complete_zone(self, event_name=None, data=None, kwargs=None):
         
         climate_state = self.get_climate_state()
 
@@ -327,6 +334,25 @@ class PeakEfficiency(hass.Hass, PersistentBase):
 
         # Process the next entity after this one finishes
         self.process_next_zone()
+
+    def delayed_get_temperature(self, kwargs=None):
+
+        climate = kwargs.get("climate_entity")
+        delay_duration = kwargs.get("delay_duration", 60)  # Default to 60 seconds if not provided
+
+        current_temp = self.get_state(climate, attribute="current_temperature")
+
+        if delay_duration == 30:
+            self.summary.zones[climate].end_temp_30min = float(current_temp)
+        elif delay_duration == 60:
+            self.summary.zones[climate].end_temp_60min = float(current_temp)
+        else:
+            self.log(f"Unknown delay duration: {delay_duration} seconds. No action taken.")
+            return
+        
+        self.summary.save()
+        self.log(f"Delayed temperature for {climate} at {delay_duration} minutes: {current_temp}C", level="DEBUG")
+            
         
     def save_climate_state(self, state: ClimateState):
         """
