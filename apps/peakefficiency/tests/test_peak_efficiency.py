@@ -10,10 +10,9 @@ from pydantic import BaseModel
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import PeakEfficiency, ClimateState, ZoneSummary, DailySummary
+from main import PeakEfficiency, ZoneSummary, DailySummary
 
 from main import (
-    RESTORE_TEMPERATURE_TIMER,
     MANUAL_START,
     DRY_RUN,
     OUTDOOR_TEMPERATURE_SENSOR,
@@ -43,9 +42,13 @@ class MockPeakEfficiency(PeakEfficiency):
         object.__setattr__(self, "listen_state", MagicMock())
         object.__setattr__(self, "listen_event", MagicMock())
         object.__setattr__(self, "run_daily", MagicMock(side_effect=self._mock_run_daily))
+        object.__setattr__(self, "run_in", MagicMock(side_effect=self._mock_run_in))
         object.__setattr__(self, "cancel_timer", MagicMock())
         object.__setattr__(self, "args", {"latitude": 50.88171971069347, "longitude": -119.89710569337053})
-        object.__setattr__(self, "scheduled_tasks", [])
+        object.__setattr__(self, "run_daily_jobs", [])
+        object.__setattr__(self, "run_in_jobs", [])
+        object.__setattr__(self, "_temperature_cycle", [14, 14.5, 15])
+        object.__setattr__(self, "_temperature_index", 0)
 
     def _assert_api_running(self):
         # Override to do nothing in the mock
@@ -55,11 +58,8 @@ class MockPeakEfficiency(PeakEfficiency):
         print(f"{level}: {message}")
 
     def _mock_get_state(self, entity, attribute=None):
-        if entity == RESTORE_TEMPERATURE_TIMER:
-            if attribute is None:
-                return ""
-        
-        elif entity == MANUAL_START:
+       
+        if entity == MANUAL_START:
             return "on"
         elif entity == DRY_RUN:
             return "off"
@@ -74,12 +74,19 @@ class MockPeakEfficiency(PeakEfficiency):
         elif entity == PEAK_EFFICIENCY_DISABLED:
             return "off"
         elif entity.startswith("climate.") and attribute == "current_temperature":
-            return "20.0"
+            value = self._temperature_cycle[self._temperature_index]
+            self._temperature_index = (self._temperature_index + 1) % len(self._temperature_cycle)
+            return value
         return "heat"
 
     def _mock_run_daily(self, func, time, **kwargs):
         #add the scheduled task to the list
-        self.scheduled_tasks.append((func, time, kwargs))
+        self.run_daily_jobs.append((func, time, kwargs))
+
+    def _mock_run_in(self, func, delay, **kwargs):
+        #add the scheduled task to the list
+        print(f"Scheduling {func.__name__} to run in {delay} seconds with args {kwargs}")
+        self.run_in_jobs.append((func, delay, kwargs))
 
 @pytest.fixture
 def app():
@@ -87,11 +94,35 @@ def app():
     app.initialize()
     return app
 
-def test_process_next_zone(app):
+def test_full_day(app):
 
     app.start_heat_soak()
-    while app.all_zones_processed is False:
-        app.complete_zone()
+    while app.run_in_jobs:
+        job = app.run_in_jobs.pop(0)  # Remove the job from the list
+        job_func, job_delay, job_kwargs = job  # Unpack the tuple
+        job_func(job_kwargs)  # Call the function with the kwargs
+
+    app.finalize_day()
+
+def test_resume_after_restart(app):
+
+    app.start_heat_soak()
+
+# Simulate a restart by clearing the run_in_jobs list
+    
+    print("#################################")
+    print("Simulating restart...")
+    print("#################################")
+
+    app = MockPeakEfficiency()
+    app.initialize()
+
+    while app.run_in_jobs:
+        job = app.run_in_jobs.pop(0)  # Remove the job from the list
+        job_func, job_delay, job_kwargs = job  # Unpack the tuple
+        job_func(job_kwargs)  # Call the function with the kwargs
+
+    app.finalize_day()    
 
 
 # def test_stop_heat_soak(app):

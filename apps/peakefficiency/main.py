@@ -6,11 +6,12 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, asdict, fields
 from forecast import ForecastSummary, ForecastDailySummary
 from utils import HelperUtils
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, PrivateAttr, ConfigDict
 from diskcache import Cache
 from typing import Type, TypeVar
 import os
 from typing import List, Dict, Optional
+from persistent_scheduler import PersistentScheduler
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
@@ -20,7 +21,6 @@ DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
 DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
 
 #home assistant helpers
-RESTORE_TEMPERATURE_TIMER = "timer.peak_efficiency_retore_temperature"
 MANUAL_START = "input_boolean.start_peak_efficiency"
 DRY_RUN = "input_boolean.peak_efficiency_dry_run"
 OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
@@ -33,57 +33,67 @@ PEAK_EFFICIENCY_DISABLED = "input_boolean.peak_efficiency_disabled"
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "cache")
 ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
 
-@dataclass
-class ClimateState:
-    climate: str
-    outside_temp: float
-    start_temp: float
-
-    def to_json(self):
-        """Convert the dataclass to a JSON string."""
-        return json.dumps(asdict(self))
-
-    @staticmethod
-    def from_json(json_str):
-        """Create a ClimateState instance from a JSON string."""
-        data = json.loads(json_str)
-        return ClimateState(**data)
     
 T = TypeVar("T", bound="PersistentBase")
 
+
+
 class PersistentBase(BaseModel):
-    _cache = Cache(CACHE_PATH)
+    _cache: Cache = PrivateAttr(default_factory=lambda: Cache(CACHE_PATH))
     _cache_key: str = ""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)  
+    model_config = ConfigDict(arbitrary_types_allowed=True) 
 
     def save(self):
         data = self.model_dump()
         self._cache.set(self._cache_key, data)
 
     @classmethod
-    def load(cls: Type[T], cache_key: str) -> T:
-        data = cls._cache.get(cache_key)
+    def load(cls, cache_key: str):
+        instance = cls()
+        data = instance._cache.get(cache_key)
         if data:
-            obj = cls(**data)
-        else:
-            obj = cls()
-        obj._cache_key = cache_key
-        return obj
+            instance = cls(**data)
+        instance._cache_key = cache_key
+        return instance
 
     def clear(self):
         self._cache.delete(self._cache_key)
 
    
+class TemperatureRecord(BaseModel):
+    temperature: float
+    timestamp: datetime
+    minutes_after_end: float
+
+
 class ZoneSummary(BaseModel):
     zone: Optional[str] = None
     start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
     duration: Optional[int] = None
     start_temp: Optional[float] = None
     outside_temp: Optional[float] = None  # taken at start
     end_temp: Optional[float] = None
-    end_temp_30min: Optional[float] = None
-    end_temp_60min: Optional[float] = None
+    completed: bool = False  # Flag to indicate if the zone has been completed
+    temperature_records: List[TemperatureRecord] = []  # List of temperature records
+
+    def add_end_temperature(self, temperature: float, timestamp: datetime = datetime.now()):
+        """
+        Add a temperature record to the list, including the time difference from end_time.
+        """
+        if self.end_time is None:
+            raise ValueError("end_time must be set before adding temperature records.")
+
+        time_difference = (timestamp - self.end_time).total_seconds() / 60  # Calculate time difference in minutes
+        record = TemperatureRecord(
+            temperature=temperature,
+            timestamp=timestamp,
+            minutes_after_end=time_difference
+        )
+        self.temperature_records.append(record)
+
+        return record
 
 
 class DailySummary(PersistentBase):
@@ -120,7 +130,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
     full_entity_list: List[str] = []  # Will store all entities to run
     heat_durations: Dict[str, int] = {}  # Will store custom heating durations for each zone
     all_zones_processed: bool = False  # Flag to check if all zones have been processed
-    
+    job_scheduler: Optional[PersistentScheduler] = None
 
     def initialize(self):
         
@@ -131,12 +141,13 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             self.log("Latitude and longitude arguments not provided, forecast will not be used", level="WARNING")
             
         hu = HelperUtils(self)
+
+        # Load the summary from the cache if it exists, otherwise create a new one
+        self.summary = DailySummary.load("daily:summary")
+        self.job_scheduler = PersistentScheduler(self, cache_path=CACHE_PATH)
         
-        self.all_zones_processed = False
-        self.schedule_handle = None
         #make sure helpers exist, otherwise error out
         #check if the timer exists
-        hu.assert_entity_exists(RESTORE_TEMPERATURE_TIMER, "Peak Efficiency Restore Timer")
         hu.assert_entity_exists(AWAY_MODE_ENABLED, "Away Mode Enabled")
         
         hu.assert_entity_exists(MANUAL_START, "Peak Efficiency Manual Start", required=False)
@@ -144,12 +155,6 @@ class PeakEfficiency(hass.Hass, PersistentBase):
         hu.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor", required=False)
         hu.assert_entity_exists(AWAY_TARGET_TEMP, "Away Mode Target Temperature", required=False)
         hu.assert_entity_exists(AWAY_PEAK_HEAT_TO_TEMP, "Away Mode Peak Heat Temperature", required=False)
-        
-        
-        cache_dir = os.path.join(os.path.dirname(__file__), "cache")
-        self.log(f"Cache directory: {cache_dir}", level="DEBUG")
-        self.cache = Cache(cache_dir)
-        self.summary = DailySummary(cache_key="daily:summary")
         
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
@@ -169,54 +174,31 @@ class PeakEfficiency(hass.Hass, PersistentBase):
         # Optional trigger
         self.listen_state(self.start_heat_soak, MANUAL_START, new="on")
 
-        #check if timer is running which means we are in the middle of a run
-        timer_state = self.get_state(RESTORE_TEMPERATURE_TIMER)
-        if timer_state == "active":
-            #get the state info
-            climate_state = self.get_climate_state(clear_after_reading=False)
-            #get time left on timer
-            hours, minutes, seconds = 0, 0, 0
-            finishes_at = self.get_state(RESTORE_TEMPERATURE_TIMER, attribute="finishes_at")
-            if finishes_at:
-                finishes_at_dt = datetime.fromisoformat(finishes_at)
-                now = datetime.now(timezone.utc)
-                time_left = finishes_at_dt - now
+        # Restore state if the system rebooted
+        if self.summary.zones:
+            #start with all zones and then remove those that have been completed
+            self._create_entity_queue(hvac_mode="heat")
 
-                if time_left.total_seconds() > 0:
-                    hours, remainder = divmod(time_left.total_seconds(), 3600)
-                    minutes, seconds = divmod(remainder, 60)
-                    
-                #add the remaining thermostats to the queue after the current one
-                if climate_state and climate_state.climate in self.full_entity_list:
-                    start_index = self.full_entity_list.index(climate_state.climate) + 1
-                    self.active_queue = []
-                    found_current = False
-                    for entity in self.full_entity_list:
-                        if entity == climate_state.climate:
-                            found_current = True
-                            continue
-                        if found_current and self.get_state(entity) == "heat":
-                            self.active_queue.append(entity)
-            else:
-                self.log("Could not retrieve 'finishes_at' attribute from the timer.")
-            
-            self.log(f"PeakEfficiency timer is active for {climate_state.climate}, temperature will be restored in {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds.")
-        
-        #using timer helper from home assistant to restore the temperature even if home assistant reboots
-        self.listen_event(self.complete_zone, "timer.finished", entity_id=RESTORE_TEMPERATURE_TIMER)
-        
-        #run manually and then run the scheduler daily to figure when the best time to run override based on the weather forecast
-        self.schedule_energy_soak_run()
+            self.log("Restoring state from cache...", level="INFO")
+            for climate_entity, zone_summary in self.summary.zones.items():
+                self.log(f"Zone {climate_entity} was started already, removing from active queue.", level="DEBUG")
+                self.active_queue.remove(climate_entity)
+
+            self.log(f"PeakEfficiency Summary: {self.summary}", level="INFO")
+
+        else:
+            #run manually and then run the scheduler daily to figure when the best time to run override based on the weather forecast
+            self.schedule_energy_soak_run()
+
+
         self.run_daily(self.schedule_energy_soak_run, DAILY_SCHEDULE_SOAK_RUN)
         
         self.log(f"PeakEfficiency initialized.")
         
     def schedule_energy_soak_run(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
-        
-        self.summary.clear()
+
         self.summary.date = datetime.now()
-        self.summary.save()
         
         run_at = DEFAULT_RUN_AT_TIME
         
@@ -238,7 +220,6 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             run_at = best_start_time.time() if best_start_time else run_at
 
             self.summary.forecast = forecastSummary.summarize()
-            self.summary.save()
             
         else:
             self.log("Latitude and longitude not set, using default run time.", level="WARNING")
@@ -249,14 +230,16 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             
         #only run this while in away mode
         if self._is_away_mode_enabled():
-            self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
             self.all_zones_processed = False
+            self.schedule_handle = self.run_daily(self.start_heat_soak, run_at)
       
             run_at_am_pm = run_at.strftime("%I:%M %p")
             self.log(f"PeakEfficiency will run today at {run_at_am_pm}.", level="INFO")
         else:
             if not self._is_away_mode_enabled():
                 self.log("PeakEfficiency will not run today because away mode is not enabled.", level="INFO")
+
+        self.summary.save()
 
 
     def start_heat_soak(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
@@ -266,7 +249,7 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             return
 
         # Create a queue of entities that are in heat mode
-        self.active_queue = [e for e in self.full_entity_list if self.get_state(e) == "heat"]
+        self._create_entity_queue(hvac_mode="heat")
 
         if not self.active_queue:
             self.log("No climate entities in heat mode — nothing to do.")
@@ -278,116 +261,100 @@ class PeakEfficiency(hass.Hass, PersistentBase):
     def process_next_zone(self, kwargs=None):
         if not self.active_queue:
             self.log("All climate entities have been processed.")
-            #self.summary.print_cache_contents(self.log)
-
-            self.log(f"Cache contents: {self.summary}")
-
             self.all_zones_processed = True
             return
 
-        climate = self.active_queue.pop(0)
-        heat_duration = self.heat_durations.get(climate, DEFAULT_HEATING_DURATION)
-        self.log(f"Overriding {climate} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
+        climate_entity = self.active_queue.pop(0)
+        heat_duration = self.heat_durations.get(climate_entity, DEFAULT_HEATING_DURATION)
+        self.log(f"Overriding {climate_entity} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
 
         do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run:
-            self.call_service("climate/set_temperature", entity_id=climate, temperature=self.heat_to_temp)
+            self.call_service("climate/set_temperature", entity_id=climate_entity, temperature=self.heat_to_temp)
             
-        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Setting temperature to {self.heat_to_temp}C")         
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate_entity}: Setting temperature to {self.heat_to_temp}C")         
 
         outside_temp = self.get_state(OUTDOOR_TEMPERATURE_SENSOR)
-        current_temp = self.get_state(climate, attribute="current_temperature")
+        current_temp = self.get_state(climate_entity, attribute="current_temperature")
 
-        self.save_climate_state(ClimateState(climate=climate, outside_temp=outside_temp, start_temp=current_temp))
-        
         zone_summary = ZoneSummary(
-            zone=climate,
+            zone=climate_entity,
             start_time=datetime.now(),
+            end_time=datetime.now() + timedelta(seconds=heat_duration),
             duration=heat_duration,
             start_temp=current_temp,
             outside_temp=outside_temp
         )
         
-        self.summary.zones[climate] = zone_summary
+        self.summary.zones[climate_entity] = zone_summary
         self.summary.save()
-        
-        self.call_service("timer/start", entity_id=RESTORE_TEMPERATURE_TIMER, duration=str(timedelta(seconds=heat_duration)))
-        
-    def complete_zone(self, event_name=None, data=None, kwargs=None):
-        
-        climate_state = self.get_climate_state()
 
-        climate = climate_state.climate
-        outside_temp = climate_state.outside_temp
-        start_temp = climate_state.start_temp
+        job_id = self.job_scheduler.schedule(self.complete_zone, datetime.now() + timedelta(minutes=heat_duration), kwargs={"climate_entity": climate_entity})
+        self.log(f"Scheduled job '{job_id}' to run in {heat_duration} seconds for {climate_entity}.")
+        
+    def complete_zone(self, kwargs=None):
+        
+        climate_entity = kwargs.get("climate_entity")
+        if climate_entity is None:
+            self.log("No climate entity provided, cannot complete zone.")
+            return
 
-        current = self.get_state(climate, attribute="current_temperature")
+        current = self.get_state(climate_entity, attribute="current_temperature")
+        self.log(f"Completing zone {climate_entity} with current temperature: {current}C, restore temperature to: {self.restore_temp}C")
         
         do_dry_run = self.get_state(DRY_RUN) == "on"
         if not do_dry_run: 
-            self.call_service("climate/set_temperature", entity_id=climate, temperature=self.restore_temp)
+            self.call_service("climate/set_temperature", entity_id=climate_entity, temperature=self.restore_temp)
 
-        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate}: Restored temperature to {self.restore_temp}C -- Outside: {outside_temp}C | Start: {start_temp}C | End: {current}C")  
+        self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate_entity}: Restored temperature to {self.restore_temp}C")  
         
-        self.summary.zones[climate].end_temp = float(current)
+        self.summary.zones[climate_entity].end_temp = float(current)
+        self.summary.zones[climate_entity].completed = True
         self.summary.save()
+
+        self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=30), kwargs={"climate_entity": climate_entity})
+        self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=60), kwargs={"climate_entity": climate_entity})
 
         # Process the next entity after this one finishes
         self.process_next_zone()
 
     def delayed_get_temperature(self, kwargs=None):
 
-        climate = kwargs.get("climate_entity")
-        delay_duration = kwargs.get("delay_duration", 60)  # Default to 60 seconds if not provided
-
-        current_temp = self.get_state(climate, attribute="current_temperature")
-
-        if delay_duration == 30:
-            self.summary.zones[climate].end_temp_30min = float(current_temp)
-        elif delay_duration == 60:
-            self.summary.zones[climate].end_temp_60min = float(current_temp)
-        else:
-            self.log(f"Unknown delay duration: {delay_duration} seconds. No action taken.")
+        climate_entity = kwargs.get("climate_entity")
+        if climate_entity is None:
+            self.log("No climate entity provided, cannot get delayed temperature.")
             return
-        
+
+        current_temp = self.get_state(climate_entity, attribute="current_temperature")
+
+        record = self.summary.zones[climate_entity].add_end_temperature(float(current_temp))            
         self.summary.save()
-        self.log(f"Delayed temperature for {climate} at {delay_duration} minutes: {current_temp}C", level="DEBUG")
-            
-        
-    def save_climate_state(self, state: ClimateState):
-        """
-        Save a ClimateState object to an input_text entity.
-        Raises an error if the input_text entity is not empty.
-        """
-        climate_state = self.cache.get(ZONE_STATE_KEY, default=None)
-        if climate_state is not None:
-            raise ValueError(f"Cannot save zone state: it is not empty, got {climate_state}")
-        
-        try:
-            self.cache.set(ZONE_STATE_KEY, state.to_json())
-            self.log(f"State saved: {state}", level="DEBUG")
-        except Exception as e:
-            self.error(f"Failed to save zone state: {e}")
-            raise
+        self.log(f"{climate_entity}: Delayed temperature for {record.minutes_after_end} minutes: {current_temp}C", level="DEBUG")
 
-    def get_climate_state(self, clear_after_reading=True) -> ClimateState:
+    def _create_entity_queue(self, hvac_mode: str = "heat"):
         """
-        Retrieve and decode the state from an input_text entity as a ClimateState object.
+        Create a queue of entities that are in the specified HVAC mode.
         """
-        try:
-            raw_state = self.cache.get(ZONE_STATE_KEY, default=None)
-            if not raw_state:
-                raise ValueError(f"zone state is empty or unavailable.")
-            if clear_after_reading:
-                self.cache.delete(ZONE_STATE_KEY)
-            return ClimateState.from_json(raw_state)
-        except json.JSONDecodeError as e:
-            self.error(f"Failed to decode zone state: {e}")
-            raise
-        except Exception as e:
-            self.error(f"Unexpected error while retrieving zone state: {e}")
-            raise
+        self.active_queue = [e for e in self.full_entity_list if self.get_state(e) == hvac_mode]
 
+    def finalize_day(self):
+        """
+        Finalize the day by saving the summary and clearing the cache.
+        """
+        self.log_summary()
+
+        ## Clear the cache for the next day
+        self.summary.clear()
+
+        # clear the summary memory structure
+        self.summary = DailySummary.load("daily:summary")
+
+        self.log("Finalized day, summary saved.", level="INFO")
+
+    def log_summary(self):
+        #for now just print it
+        self.log(f"PeakEfficiency Summary: {self.summary}", level="INFO")
+                    
     def _is_away_mode_enabled(self):
         """
         Check if the home/away mode is enabled.
