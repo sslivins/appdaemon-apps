@@ -198,6 +198,9 @@ class PeakEfficiency(hass.Hass, PersistentBase):
     def schedule_energy_soak_run(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
 
+        if self.summary.date:
+            self.finalize_day()
+        
         self.summary.date = datetime.now()
         
         run_at = DEFAULT_RUN_AT_TIME
