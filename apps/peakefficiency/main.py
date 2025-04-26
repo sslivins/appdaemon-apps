@@ -198,31 +198,25 @@ class PeakEfficiency(hass.Hass, PersistentBase):
     def schedule_energy_soak_run(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         '''Figure out when the best time to run is based on the forecast.'''
 
-        if self.summary.date:
-            self.finalize_day()
-        
-        self.summary.date = datetime.now()
-        
         run_at = DEFAULT_RUN_AT_TIME
         
         if self.latitude is not None and self.longitude is not None:
-            forecastSummary = ForecastSummary(self, self.latitude, self.longitude)
-            
-            forecast = forecastSummary.get_forecast_data()
-            
-            for f_time, f_temp, f_humidity, f_radiation in forecast:
-                self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
-            
+           
             #get total run time of heat_durations
             total_run_time = sum(self.heat_durations.values()) / 60  # convert to minutes
             
-            best_start_time, _ = forecastSummary.warmest_hours(total_run_time)
+            forecastObj = ForecastSummary(self, self.latitude, self.longitude)
+            
+            forecase = forecastObj.get_forecast_data()
+            
+            for f_time, f_temp, f_humidity, f_radiation in forecase:
+                self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
+            
+            best_start_time, _ = forecastObj.warmest_hours(total_run_time)
             
             self.log(f"Best start time based on weather forecast is: {best_start_time}", level="INFO")
             
             run_at = best_start_time.time() if best_start_time else run_at
-
-            self.summary.forecast = forecastSummary.summarize()
             
         else:
             self.log("Latitude and longitude not set, using default run time.", level="WARNING")
@@ -242,10 +236,16 @@ class PeakEfficiency(hass.Hass, PersistentBase):
             if not self._is_away_mode_enabled():
                 self.log("PeakEfficiency will not run today because away mode is not enabled.", level="INFO")
 
-        self.summary.save()
-
-
     def start_heat_soak(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
+
+        if self.summary.date:
+            self.finalize_day()
+            
+        self.summary.date = datetime.now()
+        
+        forecast = ForecastSummary(self, self.latitude, self.longitude)     
+        self.summary.forecast = forecast.summarize()
+        self.summary.save()
 
         if self._is_peak_efficiency_disabled():
             self.log("Peak Efficiency is disabled, not starting heat soak.", level="INFO")

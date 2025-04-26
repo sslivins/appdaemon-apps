@@ -21,11 +21,11 @@ class ForecastDailySummary(BaseModel):
     
 
 class ForecastSummary:
-    def __init__(self, app, lat, lon):
+    def __init__(self, app, lat, lon, hours=24):
         self.app = app
         self.lat = lat
         self.lon = lon
-        self.forecast_data = self._get_hourly_forecast(lat, lon, hours=48)
+        self.forecast_data = self._get_hourly_forecast(lat, lon, hours=hours)
         
     def get_forecast_data(self, start_time=None, end_time=None):
         """
@@ -37,7 +37,7 @@ class ForecastSummary:
     def _get_hourly_forecast(self, lat, lon, hours=6):
         
         #calculate forecast days based on hours
-        forecast_days = math.ceil(hours / 24)
+        forecast_days = math.ceil(hours / 24 + 1)
         
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
@@ -73,6 +73,17 @@ class ForecastSummary:
         temps = data["hourly"]["temperature_2m"]
         humidity = data["hourly"]["relative_humidity_2m"]
         radiation = data["hourly"]["shortwave_radiation"]
+        
+        #get the next 'hours' hours of forecast data starting from now
+        now = datetime.now().isoformat()
+        
+        #round current time down to the nearest hour
+        now = now[:13] + ":00"        
+        start_index = next((i for i, t in enumerate(times) if t >= now), 0)
+        times = times[start_index:start_index + hours]
+        temps = temps[start_index:start_index + hours]
+        humidity = humidity[start_index:start_index + hours]
+        radiation = radiation[start_index:start_index + hours]
 
         # Return a list of tuples for unpacking
         return list(zip(times, temps, humidity, radiation))[:hours]  
