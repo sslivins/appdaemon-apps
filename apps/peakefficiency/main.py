@@ -279,7 +279,7 @@ class PeakEfficiency(hass.Hass):
         heat_duration = self.heat_durations.get(climate_entity, DEFAULT_HEATING_DURATION)
         self.log(f"Overriding {climate_entity} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
 
-        do_dry_run = self.get_state(DRY_RUN) == "on"
+        do_dry_run = self._is_dry_run()
         if not do_dry_run:
             self.call_service("climate/set_temperature", entity_id=climate_entity, temperature=self.heat_to_temp)
             
@@ -300,7 +300,7 @@ class PeakEfficiency(hass.Hass):
         self.summary.zones[climate_entity] = zone_summary
         self.summary.save()
 
-        job_id = self.job_scheduler.schedule(self.complete_zone, datetime.now() + timedelta(minutes=heat_duration), kwargs={"climate_entity": climate_entity})
+        job_id = self.job_scheduler.schedule(self.complete_zone, zone_summary.end_time, kwargs={"climate_entity": climate_entity})
         self.log(f"Scheduled job '{job_id}' to run in {heat_duration} seconds for {climate_entity}.")
         
     def complete_zone(self, kwargs=None):
@@ -377,6 +377,12 @@ class PeakEfficiency(hass.Hass):
         Check if the peak efficiency is disabled.
         """
         return self.get_state(PEAK_EFFICIENCY_DISABLED) == "on"
+    
+    def _is_dry_run(self):
+        """
+        Check if the dry run mode is enabled.
+        """
+        return self.get_state(DRY_RUN) == "on"
         
     def terminate(self):
         #not using this for now
