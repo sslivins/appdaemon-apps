@@ -84,11 +84,13 @@ class ZoneSummary(BaseModel):
         """
         if self.end_time is None:
             raise ValueError("end_time must be set before adding temperature records.")
+        
+        timestamp = timestamp or datetime.now()
 
         time_difference = (timestamp - self.end_time).total_seconds() / 60  # Calculate time difference in minutes
         record = TemperatureRecord(
             temperature=temperature,
-            timestamp=timestamp or datetime.now(),
+            timestamp=timestamp,
             minutes_after_end=time_difference
         )
         self.temperature_records.append(record)
