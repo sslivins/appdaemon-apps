@@ -64,7 +64,7 @@ class PersistentBase(BaseModel):
 class TemperatureRecord(BaseModel):
     temperature: float
     timestamp: datetime
-    minutes_after_end: float
+    seconds_after_end: float
 
 
 class ZoneSummary(BaseModel):
@@ -87,11 +87,11 @@ class ZoneSummary(BaseModel):
         
         timestamp = timestamp or datetime.now()
 
-        time_difference = (timestamp - self.end_time).total_seconds() / 60  # Calculate time difference in minutes
+        time_difference = (timestamp - self.end_time).total_seconds()  # Calculate time difference in minutes
         record = TemperatureRecord(
             temperature=temperature,
             timestamp=timestamp,
-            minutes_after_end=time_difference
+            seconds_after_end=time_difference
         )
         self.temperature_records.append(record)
 
@@ -350,7 +350,7 @@ class PeakEfficiency(hass.Hass):
 
         record = self.summary.zones[climate_entity].add_end_temperature(float(current_temp))
         self.summary.save()
-        self.log(f"{climate_entity}: Delayed temperature: Got Current Temperature after {record.minutes_after_end} minutes: {current_temp}C", level="DEBUG")
+        self.log(f"{climate_entity}: Delayed temperature: Got Current Temperature after {record.seconds_after_end} seconds: {current_temp}C", level="DEBUG")
 
     def _create_entity_queue(self, hvac_mode: str = "heat"):
         """
