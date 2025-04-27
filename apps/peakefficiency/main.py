@@ -159,22 +159,26 @@ class PeakEfficiency(hass.Hass):
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
 
-        # Define custom heating durations for each zone (in seconds)
-        # self.heat_durations = {
-        #     "climate.main_floor": 40 * 60,
-        #     "climate.master_bedroom": 20 * 60,
-        #     "climate.basement_master": 20 * 60,
-        #     "climate.basement_bunk_rooms": 30 * 60,
-        #     "climate.ski_room": 10 * 60
-        # }
+        if self._is_dry_run():
+            self.heat_durations = {
+                "climate.main_floor": 1 * 60,
+                "climate.master_bedroom": 1 * 60,
+                "climate.basement_master": 1 * 60,
+                "climate.basement_bunk_rooms": 1 * 60,
+                "climate.ski_room": 1 * 60
+            }
+        else:              
         
-        self.heat_durations = {
-            "climate.main_floor": 1 * 60,
-            "climate.master_bedroom": 1 * 60,
-            "climate.basement_master": 1 * 60,
-            "climate.basement_bunk_rooms": 1 * 60,
-            "climate.ski_room": 1 * 60
-        }        
+            #Define custom heating durations for each zone (in seconds)
+            self.heat_durations = {
+                "climate.main_floor": 40 * 60,
+                "climate.master_bedroom": 20 * 60,
+                "climate.basement_master": 20 * 60,
+                "climate.basement_bunk_rooms": 30 * 60,
+                "climate.ski_room": 10 * 60
+            }
+        
+     
 
         self.full_entity_list = list(self.heat_durations.keys())
         self.active_queue = []  # Will store entities to run
@@ -313,7 +317,7 @@ class PeakEfficiency(hass.Hass):
         current = self.get_state(climate_entity, attribute="current_temperature")
         self.log(f"Completing zone {climate_entity} with current temperature: {current}C, restore temperature to: {self.restore_temp}C")
         
-        do_dry_run = self.get_state(DRY_RUN) == "on"
+        do_dry_run = self._is_dry_run()
         if not do_dry_run: 
             self.call_service("climate/set_temperature", entity_id=climate_entity, temperature=self.restore_temp)
 
@@ -323,8 +327,12 @@ class PeakEfficiency(hass.Hass):
         self.summary.zones[climate_entity].completed = True
         self.summary.save()
 
-        self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=30), kwargs={"climate_entity": climate_entity})
-        self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=60), kwargs={"climate_entity": climate_entity})
+        if do_dry_run:
+            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=30), kwargs={"climate_entity": climate_entity})
+            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=60), kwargs={"climate_entity": climate_entity})            
+        else:
+            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=30), kwargs={"climate_entity": climate_entity})
+            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=60), kwargs={"climate_entity": climate_entity})
 
         # Process the next entity after this one finishes
         self.process_next_zone()
