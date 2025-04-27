@@ -78,7 +78,7 @@ class ZoneSummary(BaseModel):
     completed: bool = False  # Flag to indicate if the zone has been completed
     temperature_records: List[TemperatureRecord] = []  # List of temperature records
 
-    def add_end_temperature(self, temperature: float, timestamp: datetime = datetime.now()):
+    def add_end_temperature(self, temperature: float, timestamp: datetime = None):
         """
         Add a temperature record to the list, including the time difference from end_time.
         """
@@ -88,7 +88,7 @@ class ZoneSummary(BaseModel):
         time_difference = (timestamp - self.end_time).total_seconds() / 60  # Calculate time difference in minutes
         record = TemperatureRecord(
             temperature=temperature,
-            timestamp=timestamp,
+            timestamp=timestamp or datetime.now(),
             minutes_after_end=time_difference
         )
         self.temperature_records.append(record)
@@ -346,9 +346,9 @@ class PeakEfficiency(hass.Hass):
 
         current_temp = self.get_state(climate_entity, attribute="current_temperature")
 
-        record = self.summary.zones[climate_entity].add_end_temperature(float(current_temp))            
+        record = self.summary.zones[climate_entity].add_end_temperature(float(current_temp))
         self.summary.save()
-        self.log(f"{climate_entity}: Delayed temperature for {record.minutes_after_end} minutes: {current_temp}C", level="DEBUG")
+        self.log(f"{climate_entity}: Delayed temperature: Got Current Temperature after {record.minutes_after_end} minutes: {current_temp}C", level="DEBUG")
 
     def _create_entity_queue(self, hvac_mode: str = "heat"):
         """
