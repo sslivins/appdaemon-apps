@@ -35,7 +35,6 @@ os.environ["HASS_TOKEN"] = "mock-token"
 class MockPeakEfficiency(PeakEfficiency):
     def __init__(self):
         # Don't call Hass.__init__ or AppDaemon-related setup
-        BaseModel.__init__(self)
         object.__setattr__(self, "log", MagicMock(side_effect=self._mock_print))
         object.__setattr__(self, "get_state", MagicMock(side_effect=self._mock_get_state))
         object.__setattr__(self, "call_service", MagicMock())

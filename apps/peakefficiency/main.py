@@ -117,7 +117,7 @@ class DailySummary(PersistentBase):
             default=str,
         )
     
-class PeakEfficiency(hass.Hass, PersistentBase):
+class PeakEfficiency(hass.Hass):
 
     latitude: Optional[float] = None
     longitude: Optional[float] = None
