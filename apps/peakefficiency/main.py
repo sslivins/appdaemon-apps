@@ -160,13 +160,21 @@ class PeakEfficiency(hass.Hass):
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
 
         # Define custom heating durations for each zone (in seconds)
+        # self.heat_durations = {
+        #     "climate.main_floor": 40 * 60,
+        #     "climate.master_bedroom": 20 * 60,
+        #     "climate.basement_master": 20 * 60,
+        #     "climate.basement_bunk_rooms": 30 * 60,
+        #     "climate.ski_room": 10 * 60
+        # }
+        
         self.heat_durations = {
-            "climate.main_floor": 40 * 60,
-            "climate.master_bedroom": 20 * 60,
-            "climate.basement_master": 20 * 60,
-            "climate.basement_bunk_rooms": 30 * 60,
-            "climate.ski_room": 10 * 60
-        }
+            "climate.main_floor": 1 * 60,
+            "climate.master_bedroom": 1 * 60,
+            "climate.basement_master": 1 * 60,
+            "climate.basement_bunk_rooms": 1 * 60,
+            "climate.ski_room": 1 * 60
+        }        
 
         self.full_entity_list = list(self.heat_durations.keys())
         self.active_queue = []  # Will store entities to run
