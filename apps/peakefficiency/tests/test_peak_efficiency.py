@@ -39,6 +39,7 @@ class MockPeakEfficiency(PeakEfficiency):
         object.__setattr__(self, "get_state", MagicMock(side_effect=self._mock_get_state))
         object.__setattr__(self, "call_service", MagicMock())
         object.__setattr__(self, "listen_state", MagicMock())
+        object.__setattr__(self, "cancel_listen_state", MagicMock())
         object.__setattr__(self, "listen_event", MagicMock())
         object.__setattr__(self, "run_daily", MagicMock(side_effect=self._mock_run_daily))
         object.__setattr__(self, "run_in", MagicMock(side_effect=self._mock_run_in))

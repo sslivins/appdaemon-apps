@@ -36,8 +36,6 @@ ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
     
 T = TypeVar("T", bound="PersistentBase")
 
-
-
 class PersistentBase(BaseModel):
     _cache: Cache = PrivateAttr(default_factory=lambda: Cache(CACHE_PATH))
     _cache_key: str = ""
@@ -65,7 +63,13 @@ class TemperatureRecord(BaseModel):
     temperature: float
     timestamp: datetime
     seconds_after_end: float
+    
 
+class UnplannedHvacAction(BaseModel):
+    hvac_action: str
+    start_time: datetime
+    end_time: datetime
+    duration: int  # Duration in seconds
 
 class ZoneSummary(BaseModel):
     zone: Optional[str] = None
@@ -77,6 +81,7 @@ class ZoneSummary(BaseModel):
     end_temp: Optional[float] = None
     completed: bool = False  # Flag to indicate if the zone has been completed
     temperature_records: List[TemperatureRecord] = []  # List of temperature records
+    unplanned_hvac_actions: List[UnplannedHvacAction] = []  # List of unplanned HVAC events (heating or cooling came on outside of the schedule)
 
     def add_end_temperature(self, temperature: float, timestamp: datetime = None):
         """
@@ -96,6 +101,28 @@ class ZoneSummary(BaseModel):
         self.temperature_records.append(record)
 
         return record
+    
+    def add_unplanned_hvac_action(self, hvac_action: str, start_time: datetime):
+        """
+        Add an unplanned HVAC action to the list.
+        """
+        action = UnplannedHvacAction(
+            hvac_action=hvac_action,
+            start_time=start_time,
+        )
+        self.unplanned_hvac_actions.append(action)
+        
+    def finalize_unplanned_hvac_action(self, end_time: datetime = None):
+        """
+        Finalize an unplanned HVAC action by setting the end time and duration.
+        """
+        end_time = end_time or datetime.now()
+        #get last unplanned hvac action in list and set the end time and duration
+        if self.unplanned_hvac_actions:
+            action = self.unplanned_hvac_actions[-1]
+            action.end_time = end_time
+            action.duration = (end_time - action.start_time).total_seconds()
+            self.unplanned_hvac_actions[-1] = action  # Update the last action in the list
 
 
 class DailySummary(PersistentBase):
@@ -133,6 +160,7 @@ class PeakEfficiency(hass.Hass):
     heat_durations: Dict[str, int] = {}  # Will store custom heating durations for each zone
     all_zones_processed: bool = False  # Flag to check if all zones have been processed
     job_scheduler: Optional[PersistentScheduler] = None
+    hvac_action_callback_handles: List[str] = []  # List to store handles for HVAC action callbacks
 
     def initialize(self):
         
@@ -335,9 +363,27 @@ class PeakEfficiency(hass.Hass):
         else:
             self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=30), kwargs={"climate_entity": climate_entity})
             self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=60), kwargs={"climate_entity": climate_entity})
+            
+        #get notified if this zone ever starts heating again
+        self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="idle", new="heating"))
+        self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="heating", new="idle"))
 
         # Process the next entity after this one finishes
         self.process_next_zone()
+        
+    def zone_hvac_action(self, entity, attribute, old, new, **kwargs):
+        """
+        Callback function to handle the HVAC action of a zone.
+        """
+        self.log(f"Zone {entity} HVAC action changed from {old} to {new}.")
+        if old == "heating" and new == "idle":
+            self.log(f"Zone {entity} finished heating.")
+            self.summary.zones[entity].finalize_unplanned_hvac_action()
+            self.summary.save()
+        elif old == "idle" and new == "heating":
+            self.log(f"Zone {entity} is heating.")
+            self.summary.zones[entity].add_unplanned_hvac_action(hvac_action=new, start_time=datetime.now())
+            self.summary.save()            
 
     def delayed_get_temperature(self, kwargs=None):
 
@@ -359,6 +405,13 @@ class PeakEfficiency(hass.Hass):
         self.active_queue = [e for e in self.full_entity_list if self.get_state(e) == hvac_mode]
 
     def finalize_day(self):
+        
+        #cancel and remove all hvac action callbacks
+        for handle in self.hvac_action_callback_handles:
+            self.cancel_listen_state(handle)
+        self.hvac_action_callback_handles.clear()
+
+            
         """
         Finalize the day by saving the summary and clearing the cache.
         """

@@ -8,16 +8,17 @@ from pydantic import BaseModel
 from typing import Optional
 
 class ForecastDailySummary(BaseModel):
-    forcast_start_time: Optional[datetime]
-    forcast_end_time: Optional[datetime]
-    latitude: Optional[float]
-    longitude: Optional[float]
-    min_forecast_temp_overnight: Optional[float]
-    avg_forecast_temp_overnight: Optional[float]
-    avg_humidity_overnight: Optional[float]
-    avg_radiation_overnight: Optional[float]
-    duration_below_zero: Optional[int]
-    hour_of_min_temp: Optional[int]
+    forecast_start_time: Optional[datetime]  # Start time of the forecast period
+    forecast_end_time: Optional[datetime]  # End time of the forecast period
+    latitude: Optional[float]  # Latitude of the location
+    longitude: Optional[float]  # Longitude of the location
+    min_temperature: Optional[float]  # Minimum temperature during the day
+    max_temperature: Optional[float]  # Maximum temperature during the day
+    avg_temperature: Optional[float]  # Average temperature during the day
+    avg_daytime_temperature: Optional[float]  # Average temperature during daylight hours
+    avg_nighttime_temperature: Optional[float]  # Average temperature during nighttime hours
+    total_solar_radiation: Optional[float]  # Total solar radiation during the day (kWh/m²)
+    avg_humidity: Optional[float]  # Average humidity during the day
     
 
 class ForecastSummary:
@@ -142,50 +143,65 @@ class ForecastSummary:
 
         return best_start_time, block_size          
 
-    def _filter_overnight_hours(self, data):
+    def _split_daytime_nighttime_hours(self, data):
         """
-        Filter for hours between sunset and wake-up (e.g. 8pm to 8am).
-        Adjust as needed.
+        Split the data into overnight and daytime hours based on the radiation.
         """
         overnight = []
+        daytime = []
         for t, temp, rh, rad in data:
-            hour = datetime.fromisoformat(t).hour
-            if hour >= 20 or hour <= 8: # 8 PM to 8 AM
+            if rad == 0:  # Radiation is 0 during nighttime
                 overnight.append((t, temp, rh, rad))
-        return overnight
-
+            else:
+                daytime.append((t, temp, rh, rad))
+        return overnight, daytime
+    
     def summarize(self):
-        overnight = self._filter_overnight_hours(self.forecast_data)
+        overnight, daytime = self._split_daytime_nighttime_hours(self.forecast_data)    
 
-        if not overnight:
-            self.app.log("No overnight data available for summary.")
-            return {}
+        # Calculate daytime and nighttime averages
+        if daytime:
+            avg_daytime_temperature = statistics.mean(temp for _, temp, _, _ in daytime)
+        else:
+            avg_daytime_temperature = None
 
-        temps = [temp for _, temp, _, _ in overnight]
-        humidities = [rh for _, _, rh, _ in overnight]
-        radiation = [rad for _, _, _, rad in overnight]
+        if overnight:
+            avg_nighttime_temperature = statistics.mean(temp for _, temp, _, _ in overnight)
+        else:
+            avg_nighttime_temperature = None
 
-        min_temp = min(temps)
-        avg_temp = statistics.mean(temps)
-        avg_humidity = statistics.mean(humidities)
-        avg_radiation = statistics.mean(radiation)
+        # Calculate overall averages
+        all_temps = [temp for _, temp, _, _ in self.forecast_data]
+        avg_temperature = statistics.mean(all_temps) if all_temps else None
+        min_temperature = min(all_temps) if all_temps else None
+        max_temperature = max(all_temps) if all_temps else None
 
-        duration_below_zero = sum(1 for t in temps if t < 0)
+        # Calculate total solar radiation
+        total_solar_radiation = sum(rad for _, _, _, rad in self.forecast_data)
 
-        # Find time of min temperature
-        min_temp_index = temps.index(min_temp)
-        min_temp_time = overnight[min_temp_index][0]
-        min_temp_hour = datetime.fromisoformat(min_temp_time).hour
-        
+        # Calculate average humidity
+        all_humidity = [rh for _, _, rh, _ in self.forecast_data]
+        avg_humidity = statistics.mean(all_humidity) if all_humidity else None
+
+        # Determine forecast start and end times
+        forecast_start_time = datetime.fromisoformat(self.forecast_data[0][0]) if self.forecast_data else None
+        forecast_end_time = datetime.fromisoformat(self.forecast_data[-1][0]) if self.forecast_data else None
+
+        # Create and return the ForecastDailySummary object
         return ForecastDailySummary(
-            forcast_start_time=overnight[0][0],
-            forcast_end_time=overnight[-1][0],
+            forecast_start_time=forecast_start_time,
+            forecast_end_time=forecast_end_time,
             latitude=self.lat,
             longitude=self.lon,
-            min_forecast_temp_overnight=min_temp,
-            avg_forecast_temp_overnight=avg_temp,
-            avg_humidity_overnight=avg_humidity,
-            avg_radiation_overnight=avg_radiation,
-            duration_below_zero=duration_below_zero,
-            hour_of_min_temp=min_temp_hour
+            min_temperature=min_temperature,
+            max_temperature=max_temperature,
+            avg_temperature=avg_temperature,
+            avg_daytime_temperature=avg_daytime_temperature,
+            avg_nighttime_temperature=avg_nighttime_temperature,
+            total_solar_radiation=total_solar_radiation,
+            avg_humidity=avg_humidity
         )
+    
+
+
+
