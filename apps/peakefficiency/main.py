@@ -23,11 +23,13 @@ DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
 #home assistant helpers
 MANUAL_START = "input_boolean.start_peak_efficiency"
 DRY_RUN = "input_boolean.peak_efficiency_dry_run"
+QUICK_RUN = "input_boolean.peak_efficiency_quick_run"
 OUTDOOR_TEMPERATURE_SENSOR = "sensor.condenser_temperature_sensor_temperature"
 AWAY_TARGET_TEMP = "input_number.away_mode_target_temperature"
 AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
 AWAY_MODE_ENABLED = "input_boolean.home_away_mode_enabled"
 PEAK_EFFICIENCY_DISABLED = "input_boolean.peak_efficiency_disabled"
+
 
 
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "cache")
@@ -185,11 +187,12 @@ class PeakEfficiency(hass.Hass):
         hu.assert_entity_exists(OUTDOOR_TEMPERATURE_SENSOR, "Outdoor Temperature Sensor", required=False)
         hu.assert_entity_exists(AWAY_TARGET_TEMP, "Away Mode Target Temperature", required=False)
         hu.assert_entity_exists(AWAY_PEAK_HEAT_TO_TEMP, "Away Mode Peak Heat Temperature", required=False)
+        hu.assert_entity_exists(QUICK_RUN, "Peak Efficiency Quick Run", required=False)
         
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
 
-        if self._is_dry_run():
+        if self._is_quick_run():
             self.heat_durations = {
                 "climate.main_floor": 1 * 60,
                 "climate.master_bedroom": 1 * 60,
@@ -357,7 +360,7 @@ class PeakEfficiency(hass.Hass):
         self.summary.zones[climate_entity].completed = True
         self.summary.save()
 
-        if do_dry_run:
+        if self._is_quick_run():
             self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=30), kwargs={"climate_entity": climate_entity})
             self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=60), kwargs={"climate_entity": climate_entity})            
         else:
@@ -446,6 +449,12 @@ class PeakEfficiency(hass.Hass):
         Check if the dry run mode is enabled.
         """
         return self.get_state(DRY_RUN) == "on"
+    
+    def _is_quick_run(self):
+        """
+        Check if the quick run mode is enabled.
+        """
+        return self.get_state(QUICK_RUN) == "on"
         
     def terminate(self):
         #not using this for now
