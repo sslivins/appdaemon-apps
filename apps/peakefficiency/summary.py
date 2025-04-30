@@ -131,6 +131,91 @@ class DailySummary(PersistentBase):
     def __init__(self, cache_path: str, cache_key: str = "", **data):
         super().__init__(cache_path=cache_path, cache_key=cache_key, **data)
 
+    def cache_exists(self) -> bool:
+        """
+        Check if the cache exists for the current date.
+        """
+        return self._cache.get(self._cache_key) is not None
+    
+    def get_started_zones(self) -> List[str]:
+        """
+        Get a list of zones that have started.
+        """
+        return [zone for zone, summary in self.zones.items()]
+    
+    def set_start_time(self):
+        self.summary.date = datetime.now()
+        self.summary.save()
+
+    def set_forecast(self, latitude: float, longitude: float):
+        """
+        Set the forecast for the current date using latitude and longitude.
+        """
+        self.forecast = ForecastDailySummary(latitude=latitude, longitude=longitude)
+        self.forecast.save()
+
+    def start_zone(self, climate_entity: str, start_time: datetime = None, end_time: datetime = None, start_temp: float = None, outside_temp: float = None):
+        """
+        Start a zone with the given start and end times.
+        """
+        run_duration = (end_time - start_time).total_seconds() if end_time else 0
+
+        zone_summary = ZoneSummary(
+            zone=climate_entity,
+            start_time=datetime.now(),
+            end_time=end_time,
+            duration=run_duration,
+            start_temp=start_temp,
+            outside_temp=outside_temp
+        )
+        
+        self.summary.zones[climate_entity] = zone_summary
+        self.summary.save()
+
+    def complete_zone(self, climate_entity: str, end_temp: float):
+        self.summary.zones[climate_entity].end_temp = float(end_temp)
+        self.summary.zones[climate_entity].completed = True
+        self.summary.save()
+
+    def start_unplanned_hvac_action(self, climate_entity: str, hvac_action: str, start_time: datetime = None):
+        """
+        Start an unplanned HVAC action for the specified zone.
+        """
+        start_time = start_time or datetime.now()
+        zone_summary = self.summary.zones.get(climate_entity)
+        
+        if zone_summary:
+            zone_summary.add_unplanned_hvac_action(hvac_action, start_time)
+            self.summary.save()
+        else:
+            raise ValueError(f"Zone '{climate_entity}' not found in summary.")
+
+    def complete_unplanned_hvac_action(self, climate_entity: str, end_time: datetime = None):
+        """
+        Complete an unplanned HVAC action for the specified zone.
+        """
+        end_time = end_time or datetime.now()
+        zone_summary = self.summary.zones.get(climate_entity)
+        
+        if zone_summary:
+            zone_summary.finalize_unplanned_hvac_action(end_time)
+            self.summary.save()
+        else:
+            raise ValueError(f"Zone '{climate_entity}' not found in summary.")
+        
+    def add_delay_temperature(self, climate_entity: str, temperature: float, timestamp: datetime = None):
+        """
+        Add a temperature record to the specified zone, including the time difference from end_time.
+        """
+        zone_summary = self.summary.zones.get(climate_entity)
+        
+        if zone_summary:
+            record = zone_summary.add_end_temperature(temperature, timestamp)
+            self.summary.save()
+            return record
+        else:
+            raise ValueError(f"Zone '{climate_entity}' not found in summary.")
+
     def __str__(self):
         """Provide a string representation of the DailySummary for printing."""
         return json.dumps(

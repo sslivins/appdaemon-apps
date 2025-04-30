@@ -84,12 +84,12 @@ class PeakEfficiency(hass.Hass):
         self.listen_state(self.start_heat_soak, MANUAL_START, new="on")
 
         # Restore state if the system rebooted
-        if self.summary.zones:
+        if self.summary.cache_exists():
             #start with all zones and then remove those that have been completed
             self._create_entity_queue(hvac_mode="heat")
 
             self.log("Restoring state from cache...", level="INFO")
-            for climate_entity, zone_summary in self.summary.zones.items():
+            for climate_entity in self.summary.get_started_zones():
                 self.log(f"Zone {climate_entity} was started already, removing from active queue.", level="DEBUG")
                 self.active_queue.remove(climate_entity)
 
@@ -149,11 +149,8 @@ class PeakEfficiency(hass.Hass):
         if self.summary.date:
             self.finalize_day()
             
-        self.summary.date = datetime.now()
-        
-        forecast = ForecastSummary(self, self.latitude, self.longitude)     
-        self.summary.forecast = forecast.summarize()
-        self.summary.save()
+        self.summary.set_start_time()
+        self.summary.set_forecast(self.latitude, self.longitude)
 
         if self._is_peak_efficiency_disabled():
             self.log("Peak Efficiency is disabled, not starting heat soak.", level="INFO")
@@ -188,19 +185,17 @@ class PeakEfficiency(hass.Hass):
         outside_temp = self.get_state(OUTDOOR_TEMPERATURE_SENSOR)
         current_temp = self.get_state(climate_entity, attribute="current_temperature")
 
-        zone_summary = ZoneSummary(
-            zone=climate_entity,
+        end_time = datetime.now() + timedelta(seconds=run_duration)
+
+        self.climate.start_zone(
+            climate_entity=climate_entity,
             start_time=datetime.now(),
-            end_time=datetime.now() + timedelta(seconds=run_duration),
-            duration=run_duration,
+            end_time=end_time,
             start_temp=current_temp,
             outside_temp=outside_temp
         )
-        
-        self.summary.zones[climate_entity] = zone_summary
-        self.summary.save()
 
-        job_id = self.job_scheduler.schedule(self.complete_zone, zone_summary.end_time, kwargs={"climate_entity": climate_entity})
+        job_id = self.job_scheduler.schedule(self.complete_zone, end_time, kwargs={"climate_entity": climate_entity})
         self.log(f"Scheduled job '{job_id}' to run in {run_duration} seconds for {climate_entity}.")
         
     def complete_zone(self, kwargs=None):
@@ -219,9 +214,7 @@ class PeakEfficiency(hass.Hass):
 
         self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate_entity}: Restored temperature to {self.restore_temp}C")  
         
-        self.summary.zones[climate_entity].end_temp = float(current)
-        self.summary.zones[climate_entity].completed = True
-        self.summary.save()
+        self.summary.complete_zone(climate_entity=climate_entity, end_temp=current)
         
         delay_check_temp_1 = 30 if self._is_quick_run() else 30 * 60
         delay_check_temp_2 = 60 if self._is_quick_run() else 60 * 60
@@ -245,12 +238,10 @@ class PeakEfficiency(hass.Hass):
         self.log(f"Zone {entity} HVAC action changed from {old} to {new}.")
         if old == "heating" and new == "idle":
             self.log(f"Zone {entity} finished heating.")
-            self.summary.zones[entity].finalize_unplanned_hvac_action()
-            self.summary.save()
+            self.summary.finalize_unplanned_hvac_action()
         elif old == "idle" and new == "heating":
             self.log(f"Zone {entity} is heating.")
-            self.summary.zones[entity].add_unplanned_hvac_action(hvac_action=new, start_time=datetime.now())
-            self.summary.save()            
+            self.summary.add_unplanned_hvac_action(hvac_action=new, start_time=datetime.now())            
 
     def delayed_get_temperature(self, kwargs=None):
 
@@ -261,8 +252,7 @@ class PeakEfficiency(hass.Hass):
 
         current_temp = self.get_state(climate_entity, attribute="current_temperature")
 
-        record = self.summary.zones[climate_entity].add_end_temperature(float(current_temp))
-        self.summary.save()
+        record = self.summary.add_delay_temperature(climate_entity=climate_entity, current_temp=current_temp, time=datetime.now())
         self.log(f"{climate_entity}: Delayed temperature: Got Current Temperature after {record.seconds_after_end} seconds: {current_temp}C", level="DEBUG")
 
     def _create_entity_queue(self, hvac_mode: str = "heat"):
