@@ -7,10 +7,11 @@ import pytest
 from unittest.mock import MagicMock
 import hassapi as hass
 from pydantic import BaseModel
+import time
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import PeakEfficiency, ZoneSummary, DailySummary
+from main import PeakEfficiency
 
 from main import (
     MANUAL_START,
@@ -49,6 +50,7 @@ class MockPeakEfficiency(PeakEfficiency):
         object.__setattr__(self, "run_in_jobs", [])
         object.__setattr__(self, "_temperature_cycle", [14, 14.5, 15])
         object.__setattr__(self, "_temperature_index", 0)
+        object.__setattr__(self, "sleep", MagicMock(side_effect=time.sleep))
 
     def _assert_api_running(self):
         # Override to do nothing in the mock

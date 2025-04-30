@@ -1,17 +1,13 @@
 from datetime import time
 import hassapi as hass
-from datetime import timedelta
-import json
-from datetime import datetime, timezone
+from datetime import timedelta, datetime
 from dataclasses import dataclass, asdict, fields
 from forecast import ForecastSummary, ForecastDailySummary
 from utils import HelperUtils
-from pydantic import BaseModel, PrivateAttr, ConfigDict
-from diskcache import Cache
-from typing import Type, TypeVar
 import os
 from typing import List, Dict, Optional
 from persistent_scheduler import PersistentScheduler
+from summary import DailySummary, ZoneSummary, PersistentBase
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
@@ -30,130 +26,14 @@ AWAY_PEAK_HEAT_TO_TEMP = "input_number.away_mode_peak_heat_to_tempearture"
 AWAY_MODE_ENABLED = "input_boolean.home_away_mode_enabled"
 PEAK_EFFICIENCY_DISABLED = "input_boolean.peak_efficiency_disabled"
 
-
-
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "cache")
 ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
 
-    
-T = TypeVar("T", bound="PersistentBase")
-
-class PersistentBase(BaseModel):
-    _cache: Cache = PrivateAttr(default_factory=lambda: Cache(CACHE_PATH))
-    _cache_key: str = ""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True) 
-
-    def save(self):
-        data = self.model_dump()
-        self._cache.set(self._cache_key, data)
-
-    @classmethod
-    def load(cls, cache_key: str):
-        instance = cls()
-        data = instance._cache.get(cache_key)
-        if data:
-            instance = cls(**data)
-        instance._cache_key = cache_key
-        return instance
-
-    def clear(self):
-        self._cache.delete(self._cache_key)
-
-   
-class TemperatureRecord(BaseModel):
-    temperature: float
-    timestamp: datetime
-    seconds_after_end: float
-    
-
-class UnplannedHvacAction(BaseModel):
-    hvac_action: str
-    start_time: datetime
-    end_time: datetime
-    duration: int  # Duration in seconds
-
-class ZoneSummary(BaseModel):
-    zone: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    duration: Optional[int] = None
-    start_temp: Optional[float] = None
-    outside_temp: Optional[float] = None  # taken at start
-    end_temp: Optional[float] = None
-    completed: bool = False  # Flag to indicate if the zone has been completed
-    temperature_records: List[TemperatureRecord] = []  # List of temperature records
-    unplanned_hvac_actions: List[UnplannedHvacAction] = []  # List of unplanned HVAC events (heating or cooling came on outside of the schedule)
-
-    def add_end_temperature(self, temperature: float, timestamp: datetime = None):
-        """
-        Add a temperature record to the list, including the time difference from end_time.
-        """
-        if self.end_time is None:
-            raise ValueError("end_time must be set before adding temperature records.")
-        
-        timestamp = timestamp or datetime.now()
-
-        time_difference = (timestamp - self.end_time).total_seconds()  # Calculate time difference in minutes
-        record = TemperatureRecord(
-            temperature=temperature,
-            timestamp=timestamp,
-            seconds_after_end=time_difference
-        )
-        self.temperature_records.append(record)
-
-        return record
-    
-    def add_unplanned_hvac_action(self, hvac_action: str, start_time: datetime):
-        """
-        Add an unplanned HVAC action to the list.
-        """
-        action = UnplannedHvacAction(
-            hvac_action=hvac_action,
-            start_time=start_time,
-        )
-        self.unplanned_hvac_actions.append(action)
-        
-    def finalize_unplanned_hvac_action(self, end_time: datetime = None):
-        """
-        Finalize an unplanned HVAC action by setting the end time and duration.
-        """
-        end_time = end_time or datetime.now()
-        #get last unplanned hvac action in list and set the end time and duration
-        if self.unplanned_hvac_actions:
-            action = self.unplanned_hvac_actions[-1]
-            action.end_time = end_time
-            action.duration = (end_time - action.start_time).total_seconds()
-            self.unplanned_hvac_actions[-1] = action  # Update the last action in the list
-
-
-class DailySummary(PersistentBase):
-    date: Optional[datetime] = None
-    forecast: Optional[ForecastDailySummary] = None
-    zones: Optional[Dict[str, ZoneSummary]] = {}
-
-    def __init__(self, cache_key: str = "", **data):
-        super().__init__(**data)
-        self._cache_key = cache_key
-
-    def __str__(self):
-        """Provide a string representation of the DailySummary for printing."""
-        return json.dumps(
-            {
-                "date": self.date.isoformat() if self.date else None,
-                "forecast": self.forecast.model_dump() if self.forecast else None,
-                "zones": {k: v.model_dump() for k, v in self.zones.items()} if self.zones else {},
-            },
-            indent=2,
-            default=str,
-        )
-    
 class PeakEfficiency(hass.Hass):
 
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     schedule_handle: Optional[str] = None
-    cache: Optional[Cache] = None
     summary: Optional[DailySummary] = None
     restore_temp: Optional[float] = None
     heat_to_temp: Optional[float] = None
@@ -175,7 +55,7 @@ class PeakEfficiency(hass.Hass):
         hu = HelperUtils(self)
 
         # Load the summary from the cache if it exists, otherwise create a new one
-        self.summary = DailySummary.load("daily:summary")
+        self.summary = DailySummary.load(cache_path=CACHE_PATH, cache_key="daily:summary")
         self.job_scheduler = PersistentScheduler(self, cache_path=CACHE_PATH)
         
         #make sure helpers exist, otherwise error out
@@ -252,9 +132,9 @@ class PeakEfficiency(hass.Hass):
             
             forecastObj = ForecastSummary(self, self.latitude, self.longitude)
             
-            forecase = forecastObj.get_forecast_data()
+            forecast = forecastObj.get_forecast_data()
             
-            for f_time, f_temp, f_humidity, f_radiation in forecase:
+            for f_time, f_temp, f_humidity, f_radiation in forecast:
                 self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
             
             best_start_time, _ = forecastObj.warmest_hours(total_run_time)
@@ -359,15 +239,16 @@ class PeakEfficiency(hass.Hass):
         self.summary.zones[climate_entity].end_temp = float(current)
         self.summary.zones[climate_entity].completed = True
         self.summary.save()
-
-        if self._is_quick_run():
-            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=30), kwargs={"climate_entity": climate_entity})
-            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=60), kwargs={"climate_entity": climate_entity})            
-        else:
-            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=30), kwargs={"climate_entity": climate_entity})
-            self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(minutes=60), kwargs={"climate_entity": climate_entity})
+        
+        delay_check_temp_1 = 30 if self._is_quick_run() else 30 * 60
+        delay_check_temp_2 = 60 if self._is_quick_run() else 60 * 60
+        
+        self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=delay_check_temp_1), kwargs={"climate_entity": climate_entity})
+        self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=delay_check_temp_2), kwargs={"climate_entity": climate_entity})
             
         #get notified if this zone ever starts heating again
+        self._wait_for_state(climate_entity, attribute="hvac_action", expected_state="idle", timeout=10)        
+        
         self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="idle", new="heating"))
         self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="heating", new="idle"))
 
@@ -422,8 +303,8 @@ class PeakEfficiency(hass.Hass):
         ## Clear the cache for the next day
         self.summary.clear()
 
-        # clear the summary memory structure
-        self.summary = DailySummary.load("daily:summary")
+        # clear the summary memory structure by reloading the cleared cache
+        self.summary = DailySummary.load(cache_path=CACHE_PATH, cache_key="daily:summary")
 
         self.log("Finalized day, summary saved.", level="INFO")
 
@@ -454,7 +335,41 @@ class PeakEfficiency(hass.Hass):
         Check if the quick run mode is enabled.
         """
         return self.get_state(QUICK_RUN) == "on"
+    
+    def _wait_for_state(self, entity, attribute, expected_state, timeout=60):
+        """
+        Waits for a specific state change on a given entity within a specified timeout period.
+
+        This method continuously checks the state of the specified entity's attribute until it matches
+        the expected state or the timeout period elapses. If the state matches the expected state
+        within the timeout, the method returns `True`. Otherwise, it logs a warning and returns `False`.
+
+        Args:
+            entity (str): The name of the entity to monitor.
+            attribute (str): The specific attribute of the entity to check.
+            expected_state (Any): The state value to wait for.
+            timeout (int, optional): The maximum time to wait for the state change, in seconds. 
+                                     Defaults to 60 seconds.
+
+        Returns:
+            bool: `True` if the entity's attribute matches the expected state within the timeout period,
+                  `False` otherwise.
+
+        Logs:
+            Logs a warning message if the timeout period elapses without the entity's attribute
+            reaching the expected state.
         
+        """
+        start_time = datetime.now()
+        while True:
+            current_state = self.get_state(entity, attribute=attribute)
+            if current_state == expected_state:
+                return True
+            if (datetime.now() - start_time).total_seconds() > timeout:
+                self.log(f"Timeout waiting for {entity} to change to {expected_state} got {current_state}.", level="WARNING")
+                return False
+            self.sleep(1)
+            
     def terminate(self):
         #not using this for now
         pass
