@@ -5,7 +5,8 @@ Peak_Efficiency:
   latitude: 50.88171971069347
   longitude: -119.89710569337053
   climate_entities:
-    - climate.living_room
-    - climate.bedroom
-    - climate.kitchen
-    - climate.office
+    - climate.main_floor
+    - climate.master_bedroom
+    - climate.basement_master
+    - climate.basement_bunk_rooms
+    - climate.ski_room

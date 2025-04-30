@@ -45,7 +45,7 @@ class MockPeakEfficiency(PeakEfficiency):
         object.__setattr__(self, "run_daily", MagicMock(side_effect=self._mock_run_daily))
         object.__setattr__(self, "run_in", MagicMock(side_effect=self._mock_run_in))
         object.__setattr__(self, "cancel_timer", MagicMock())
-        object.__setattr__(self, "args", {"latitude": 50.88171971069347, "longitude": -119.89710569337053})
+        object.__setattr__(self, "args", {"latitude": 50.88171971069347, "longitude": -119.89710569337053, "climate_entities": ["climate.main_floor", "climate.master_bedroom", "climate.basement_master", "climate.basement_bunk_rooms", "climate.ski_room"]})
         object.__setattr__(self, "run_daily_jobs", [])
         object.__setattr__(self, "run_in_jobs", [])
         object.__setattr__(self, "_temperature_cycle", [14, 14.5, 15])
@@ -79,6 +79,17 @@ class MockPeakEfficiency(PeakEfficiency):
             value = self._temperature_cycle[self._temperature_index]
             self._temperature_index = (self._temperature_index + 1) % len(self._temperature_cycle)
             return value
+        elif entity.endswith("run_override"):
+            if "main_floor" in entity:
+                return "40"
+            elif "master_bedroom" in entity:
+                return "30"
+            elif "basement_master" in entity:
+                return "20"
+            elif "basement_bunk_rooms" in entity:
+                return "10"
+            elif "ski_room" in entity:
+                return "-1"
         return "heat"
 
     def _mock_run_daily(self, func, time, **kwargs):
