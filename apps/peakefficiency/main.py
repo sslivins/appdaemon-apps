@@ -12,7 +12,7 @@ from summary import DailySummary, ZoneSummary, PersistentBase
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
 DEFAULT_RUN_AT_TIME = time(15, 0, 0)  # Default run time is 3 PM
-DEFAULT_HEATING_DURATION = 20 * 60  # Default heating duration in seconds
+DEFAULT_ZONE_RUN_DURATION = 20 * 60  # Default run duration is 1 hour (3600 seconds)
 DEFAULT_PEAK_HEAT_TEMP = 19.5  # Default peak heating temperature in Celsius
 DEFAULT_AWAY_MODE_TEMP = 13  # Default away mode temperature in Celsius
 
@@ -29,6 +29,9 @@ PEAK_EFFICIENCY_DISABLED = "input_boolean.peak_efficiency_disabled"
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "cache")
 ZONE_STATE_KEY = "zone_state"  # Key for storing zone state in the cache
 
+#if you want to create an override for a zone, create an input_number with the name "input_number.peak_efficiency_<entity name without 'climate.'>_run_override"
+# e.g. input_number.peak_efficiency_main_floor_run_override
+
 class PeakEfficiency(hass.Hass):
 
     latitude: Optional[float] = None
@@ -38,8 +41,7 @@ class PeakEfficiency(hass.Hass):
     restore_temp: Optional[float] = None
     heat_to_temp: Optional[float] = None
     active_queue: List[str] = []  # Will store entities to run
-    full_entity_list: List[str] = []  # Will store all entities to run
-    heat_durations: Dict[str, int] = {}  # Will store custom heating durations for each zone
+    climate_entities: List[str] = []  # Will store all entities to run
     all_zones_processed: bool = False  # Flag to check if all zones have been processed
     job_scheduler: Optional[PersistentScheduler] = None
     hvac_action_callback_handles: List[str] = []  # List to store handles for HVAC action callbacks
@@ -48,7 +50,13 @@ class PeakEfficiency(hass.Hass):
         
         self.latitude = self.args.get("latitude")
         self.longitude = self.args.get("longitude")
-        
+
+        # Retrieve the list of climate entities from the YAML configuration
+        self.climate_entities = self.args.get("climate_entities", [])
+        if not self.climate_entities:
+            self.log("No climate entities provided in the YAML configuration.", level="ERROR")
+            return
+
         if self.latitude is None or self.longitude is None:
             self.log("Latitude and longitude arguments not provided, forecast will not be used", level="WARNING")
             
@@ -71,30 +79,6 @@ class PeakEfficiency(hass.Hass):
         
         self.restore_temp = hu.safe_get_float(AWAY_TARGET_TEMP, DEFAULT_AWAY_MODE_TEMP)
         self.heat_to_temp = hu.safe_get_float(AWAY_PEAK_HEAT_TO_TEMP, DEFAULT_PEAK_HEAT_TEMP)
-
-        if self._is_quick_run():
-            self.heat_durations = {
-                "climate.main_floor": 1 * 60,
-                "climate.master_bedroom": 1 * 60,
-                "climate.basement_master": 1 * 60,
-                "climate.basement_bunk_rooms": 1 * 60,
-                "climate.ski_room": 1 * 60
-            }
-        else:              
-        
-            #Define custom heating durations for each zone (in seconds)
-            self.heat_durations = {
-                "climate.main_floor": 40 * 60,
-                "climate.master_bedroom": 20 * 60,
-                "climate.basement_master": 20 * 60,
-                "climate.basement_bunk_rooms": 30 * 60,
-                "climate.ski_room": 10 * 60
-            }
-        
-     
-
-        self.full_entity_list = list(self.heat_durations.keys())
-        self.active_queue = []  # Will store entities to run
         
         # Optional trigger
         self.listen_state(self.start_heat_soak, MANUAL_START, new="on")
@@ -127,17 +111,16 @@ class PeakEfficiency(hass.Hass):
         
         if self.latitude is not None and self.longitude is not None:
            
-            #get total run time of heat_durations
-            total_run_time = sum(self.heat_durations.values()) / 60  # convert to minutes
-            
             forecastObj = ForecastSummary(self, self.latitude, self.longitude)
             
             forecast = forecastObj.get_forecast_data()
             
             for f_time, f_temp, f_humidity, f_radiation in forecast:
                 self.log(f"Forecast for {f_time}: Temp: {f_temp}C, Humidity: {f_humidity}%, Radiation: {f_radiation}W/m2", level="DEBUG")
+
+            total_run_time = self._get_total_zones_duration()    
             
-            best_start_time, _ = forecastObj.warmest_hours(total_run_time)
+            best_start_time, _ = forecastObj.warmest_hours(total_run_time / 60)
             
             self.log(f"Best start time based on weather forecast is: {best_start_time}", level="INFO")
             
@@ -193,8 +176,8 @@ class PeakEfficiency(hass.Hass):
             return
 
         climate_entity = self.active_queue.pop(0)
-        heat_duration = self.heat_durations.get(climate_entity, DEFAULT_HEATING_DURATION)
-        self.log(f"Overriding {climate_entity} to {self.heat_to_temp}C for {heat_duration // 60} minutes.")
+        run_duration = self._get_zone_run_duration(climate_entity)
+        self.log(f"Overriding {climate_entity} to {self.heat_to_temp}C for {run_duration // 60} minutes.")
 
         do_dry_run = self._is_dry_run()
         if not do_dry_run:
@@ -208,8 +191,8 @@ class PeakEfficiency(hass.Hass):
         zone_summary = ZoneSummary(
             zone=climate_entity,
             start_time=datetime.now(),
-            end_time=datetime.now() + timedelta(seconds=heat_duration),
-            duration=heat_duration,
+            end_time=datetime.now() + timedelta(seconds=run_duration),
+            duration=run_duration,
             start_temp=current_temp,
             outside_temp=outside_temp
         )
@@ -218,7 +201,7 @@ class PeakEfficiency(hass.Hass):
         self.summary.save()
 
         job_id = self.job_scheduler.schedule(self.complete_zone, zone_summary.end_time, kwargs={"climate_entity": climate_entity})
-        self.log(f"Scheduled job '{job_id}' to run in {heat_duration} seconds for {climate_entity}.")
+        self.log(f"Scheduled job '{job_id}' to run in {run_duration} seconds for {climate_entity}.")
         
     def complete_zone(self, kwargs=None):
         
@@ -286,7 +269,7 @@ class PeakEfficiency(hass.Hass):
         """
         Create a queue of entities that are in the specified HVAC mode.
         """
-        self.active_queue = [e for e in self.full_entity_list if self.get_state(e) == hvac_mode]
+        self.active_queue = [e for e in self.climate_entities if self.get_state(e) == hvac_mode]
 
     def finalize_day(self):
         
@@ -369,6 +352,50 @@ class PeakEfficiency(hass.Hass):
                 self.log(f"Timeout waiting for {entity} to change to {expected_state} got {current_state}.", level="WARNING")
                 return False
             self.sleep(1)
+
+    def _get_zone_run_duration(self, entity: str) -> Optional[float]:
+        """
+        Get the run duration for a specific zone.
+
+        This method checks if there is an override value for the specified zone. If an override exists,
+        it will use that value (converted to seconds). Otherwise, it falls back to the default duration
+        defined in `self.heat_durations`.
+
+        Args:
+            entity (str): The name of the entity to check.
+
+        Returns:
+            Optional[float]: The run duration in seconds, or None if not found.
+        """
+        if self._is_quick_run():
+            return 1 * 60
+        
+        # Guess the override entity name based on the climate entity name
+        entity_suffix = entity.split(".")[-1]  # Extract the suffix (e.g., "main_floor")
+        override_entity = f"input_number.peak_efficiency_{entity_suffix}_run_override"
+        if override_entity:
+            override_value = self.get_state(override_entity)
+            if override_value is not None and float(override_value) > 0:
+                return float(override_value) * 60  # Convert minutes to seconds
+            
+        return DEFAULT_ZONE_RUN_DURATION
+    
+    def _get_total_zones_duration(self) -> int:
+        """
+        Get the total run durations for all zones.
+
+        This method loops through all climate entities, retrieves their run durations using
+        the `_get_zone_run_duration` function, and returns the total sum.
+
+        Returns:
+            int: The total run duration for all zones in seconds.
+        """
+        total_duration = 0
+        for entity in self.climate_entities:
+            duration = self._get_zone_run_duration(entity)
+            if duration:
+                total_duration += duration
+        return total_duration
             
     def terminate(self):
         #not using this for now
