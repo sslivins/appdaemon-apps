@@ -374,7 +374,7 @@ class PeakEfficiency(hass.Hass):
         # Process the next entity after this one finishes
         self.process_next_zone()
         
-    def zone_hvac_action(self, entity, attribute, old, new, **kwargs):
+    def zone_hvac_action(self, entity=None, attribute=None, old=None, new=None, kwargs=None):
         """
         Callback function to handle the HVAC action of a zone.
         """
@@ -414,7 +414,6 @@ class PeakEfficiency(hass.Hass):
             self.cancel_listen_state(handle)
         self.hvac_action_callback_handles.clear()
 
-            
         """
         Finalize the day by saving the summary and clearing the cache.
         """
