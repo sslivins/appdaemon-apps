@@ -242,10 +242,10 @@ class PeakEfficiency(hass.Hass):
         self.log(f"Zone {entity} HVAC action changed from {old} to {new}.")
         if old == "heating" and new == "idle":
             self.log(f"Zone {entity} finished heating.")
-            self.summary.finalize_unplanned_hvac_action()
+            self.summary.complete_unplanned_hvac_action(entity, datetime.now())
         elif old == "idle" and new == "heating":
             self.log(f"Zone {entity} is heating.")
-            self.summary.add_unplanned_hvac_action(hvac_action=new, start_time=datetime.now())            
+            self.summary.start_unplanned_hvac_action(entity, new, datetime.now())            
 
     def delayed_get_temperature(self, kwargs=None):
 
