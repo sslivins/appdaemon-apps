@@ -9,7 +9,6 @@ from typing import List, Dict, Optional
 from persistent_scheduler import PersistentScheduler
 from summary import DailySummary, ZoneEvent
 
-
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
 DEFAULT_RUN_AT_TIME = time(15, 0, 0)  # Default run time is 3 PM
 DEFAULT_ZONE_RUN_DURATION = 20 * 60  # Default run duration is 1 hour (3600 seconds)
@@ -92,6 +91,11 @@ class PeakEfficiency(hass.Hass):
             for climate_entity in self.summary.get_started_zones():
                 self.log(f"Zone {climate_entity} was started already, removing from active queue.", level="DEBUG")
                 self.active_queue.remove(climate_entity)
+                
+            for climate_entity in self.summary.get_completed_zones():
+                self.log(f"Zone {climate_entity} was completed, listening for hvac events", level="DEBUG")
+                self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="idle", new="heating"))
+                self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="heating", new="idle"))
 
             self.log(f"PeakEfficiency Summary: {self.summary}", level="INFO")
 
@@ -187,7 +191,7 @@ class PeakEfficiency(hass.Hass):
 
         end_time = datetime.now() + timedelta(seconds=run_duration)
 
-        self.climate.start_zone(
+        self.summary.start_zone(
             climate_entity=climate_entity,
             start_time=datetime.now(),
             end_time=end_time,
@@ -238,10 +242,10 @@ class PeakEfficiency(hass.Hass):
         self.log(f"Zone {entity} HVAC action changed from {old} to {new}.")
         if old == "heating" and new == "idle":
             self.log(f"Zone {entity} finished heating.")
-            self.summary.finalize_unplanned_hvac_action()
+            self.summary.complete_unplanned_hvac_action(entity, datetime.now())
         elif old == "idle" and new == "heating":
             self.log(f"Zone {entity} is heating.")
-            self.summary.add_unplanned_hvac_action(hvac_action=new, start_time=datetime.now())            
+            self.summary.start_unplanned_hvac_action(entity, new, datetime.now())            
 
     def delayed_get_temperature(self, kwargs=None):
 
@@ -252,7 +256,7 @@ class PeakEfficiency(hass.Hass):
 
         current_temp = self.get_state(climate_entity, attribute="current_temperature")
 
-        record = self.summary.add_delay_temperature(climate_entity=climate_entity, current_temp=current_temp, time=datetime.now())
+        record = self.summary.add_delay_temperature(climate_entity=climate_entity, temperature=current_temp, timestamp=datetime.now())
         self.log(f"{climate_entity}: Delayed temperature: Got Current Temperature after {record.seconds_after_end} seconds: {current_temp}C", level="DEBUG")
 
     def _create_entity_queue(self, hvac_mode: str = "heat"):
