@@ -91,6 +91,11 @@ class PeakEfficiency(hass.Hass):
             for climate_entity in self.summary.get_started_zones():
                 self.log(f"Zone {climate_entity} was started already, removing from active queue.", level="DEBUG")
                 self.active_queue.remove(climate_entity)
+                
+            for climate_entity in self.summary.get_completed_zones():
+                self.log(f"Zone {climate_entity} was completed, listening for hvac events", level="DEBUG")
+                self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="idle", new="heating"))
+                self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="heating", new="idle"))
 
             self.log(f"PeakEfficiency Summary: {self.summary}", level="INFO")
 

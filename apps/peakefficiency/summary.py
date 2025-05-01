@@ -142,6 +142,12 @@ class DailySummary(PersistentBase):
         Get a list of zones that have started.
         """
         return [zone for zone, summary in self.zones.items()]
+      
+    def get_completed_zones(self) -> List[str]:
+        """
+        Get a list of zones that have completed.
+        """
+        return [zone for zone, summary in self.zones.items() if summary.completed]
     
     def set_start_time(self):
         self.date = datetime.now()
