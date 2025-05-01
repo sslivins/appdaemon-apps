@@ -63,7 +63,7 @@ class UnplannedHvacAction(BaseModel):
     hvac_action: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    duration: Optional[int] = None  # Duration in seconds
+    duration: Optional[float] = None  # Duration in seconds
     completed: bool = False  # Flag to indicate if the action has been completed
 
 class ZoneSummary(BaseModel):
