@@ -70,7 +70,7 @@ class ZoneSummary(BaseModel):
     zone: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    duration: Optional[int] = None
+    duration: Optional[float] = None
     start_temp: Optional[float] = None
     outside_temp: Optional[float] = None  # taken at start
     end_temp: Optional[float] = None
