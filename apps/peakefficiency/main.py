@@ -7,8 +7,7 @@ from utils import HelperUtils
 import os
 from typing import List, Dict, Optional
 from persistent_scheduler import PersistentScheduler
-from summary import DailySummary, ZoneSummary, PersistentBase
-
+from summary import DailySummary
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
 DEFAULT_RUN_AT_TIME = time(15, 0, 0)  # Default run time is 3 PM
@@ -187,7 +186,7 @@ class PeakEfficiency(hass.Hass):
 
         end_time = datetime.now() + timedelta(seconds=run_duration)
 
-        self.climate.start_zone(
+        self.summary.start_zone(
             climate_entity=climate_entity,
             start_time=datetime.now(),
             end_time=end_time,
@@ -252,7 +251,7 @@ class PeakEfficiency(hass.Hass):
 
         current_temp = self.get_state(climate_entity, attribute="current_temperature")
 
-        record = self.summary.add_delay_temperature(climate_entity=climate_entity, current_temp=current_temp, time=datetime.now())
+        record = self.summary.add_delay_temperature(climate_entity=climate_entity, temperature=current_temp, timestamp=datetime.now())
         self.log(f"{climate_entity}: Delayed temperature: Got Current Temperature after {record.seconds_after_end} seconds: {current_temp}C", level="DEBUG")
 
     def _create_entity_queue(self, hvac_mode: str = "heat"):
