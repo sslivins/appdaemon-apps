@@ -57,7 +57,6 @@ class TemperatureRecord(BaseModel):
     temperature: float
     timestamp: datetime
     seconds_after_end: float
-    
 
 class UnplannedHvacAction(BaseModel):
     hvac_action: Optional[str] = None
@@ -70,6 +69,8 @@ class ZoneSummary(BaseModel):
     zone: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    hvac_action: Optional[str] = None
+    target_temp: Optional[float] = None
     duration: Optional[int] = None
     start_temp: Optional[float] = None
     outside_temp: Optional[float] = None  # taken at start
@@ -164,6 +165,8 @@ class DailySummary(PersistentBase):
             zone=climate_entity,
             start_time=datetime.now(),
             end_time=end_time,
+            target_temp=13.5 #// TODO: this should be passed in as a parameter
+            hvac_action="heating", #// TODO: this should be passed in as a parameter
             duration=run_duration,
             start_temp=start_temp,
             outside_temp=outside_temp
@@ -215,6 +218,36 @@ class DailySummary(PersistentBase):
             return record
         else:
             raise ValueError(f"Zone '{climate_entity}' not found in summary.")
+        
+    def write_summary_to_csv(self, file_path: str):
+
+        #loop through each zone
+        for zone_name, zone_summary in self.zones.items():
+            event = ZoneEvent(
+                date=self.date,
+                forecast_min_temp=self.forecast.min_temp if self.forecast else None,
+                forecast_max_temp=self.forecast.max_temp if self.forecast else None,
+                forecast_avg_temp=self.forecast.avg_temp if self.forecast else None,
+                forecast_total_solar_radiation=self.forecast.total_solar_radiation if self.forecast else None,
+                forecast_avg_humidity=self.forecast.avg_humidity if self.forecast else None,
+                zone_name=zone_name,
+                hvac_action=zone_summary.hvac_action,
+                hvac_action_duration=zone_summary.duration,
+                unexpected_hvac_action_events=len(zone_summary.unplanned_hvac_actions),
+                unexpected_hvac_action_duartion=sum(action.duration for action in zone_summary.unplanned_hvac_actions),
+                zone_target_temp=zone_summary.target_temp,
+                zone_starting_temp=zone_summary.start_temp,
+                zone_completion_temp=zone_summary.end_temp,
+                zone_post_completion_temp_1=zone_summary.temperature_records[0].temperature if zone_summary.temperature_records else None,
+                zone_post_completion_temp_2=zone_summary.temperature_records[1].temperature if len(zone_summary.temperature_records) > 1 else None,
+                zone_final_temp=zone_summary.temperature_records[-1].temperature if zone_summary.temperature_records else None,
+                zone_temp_error=(zone_summary.end_temp - zone_summary.start_temp) if zone_summary.end_temp and zone_summary.start_temp else None
+            )
+
+            event.write_to_csv(file_path)
+
+            print(f"Zone event: {event}")
+
 
     def __str__(self):
         """Provide a string representation of the DailySummary for printing."""
@@ -228,16 +261,25 @@ class DailySummary(PersistentBase):
             default=str,
         )
         
-class CsvSummary(BaseModel):
+class ZoneEvent(BaseModel):
     date: datetime
-    min_temperature: float
-    max_temperature: float
-    avg_temperature: float
-    total_solar_radiation: float
-    avg_humidity: float
-    heating_duration: int
-    heating_start_time: datetime
-    heating_end_time: datetime
+    forecast_min_temp: float
+    forecast_max_temp: float
+    forecast_avg_temp: float
+    forecast_total_solar_radiation: float
+    forecast_avg_humidity: float
+    zone_name: str
+    hvac_action: str
+    hvac_action_duration: int
+    unexpected_hvac_action_events: int
+    unexpected_hvac_action_duartion: str
+    zone_target_temp: float
+    zone_starting_temp: float
+    zone_completion_temp: float
+    zone_post_completion_temp_1: float
+    zone_post_completion_temp_2: float
+    zone_final_temp: float
+    zone_temp_error: float # difference between the final temp and the target temp
 
     @classmethod
     def get_headers(cls) -> List[str]:
@@ -251,26 +293,41 @@ class CsvSummary(BaseModel):
         Generate a list of values corresponding to the fields of the class.
         """
         return [getattr(self, field) for field in self.__fields__.keys()]
-              
-class Summary:
-
-    def write_summary_to_csv(self, file_path: str = os.path.join(os.path.dirname(__file__), "summary.csv")):
+    
+    def __str__(self):
+        """Provide a string representation of the ZoneEvent for printing."""
+        return json.dumps(
+            {
+                "date": self.date.isoformat() if self.date else None,
+                "forecast_min_temp": self.forecast_min_temp,
+                "forecast_max_temp": self.forecast_max_temp,
+                "forecast_avg_temp": self.forecast_avg_temp,
+                "forecast_total_solar_radiation": self.forecast_total_solar_radiation,
+                "forecast_avg_humidity": self.forecast_avg_humidity,
+                "zone_name": self.zone_name,
+                "hvac_action": self.hvac_action,
+                "hvac_action_duration": self.hvac_action_duration,
+                "unexpected_hvac_action_events": self.unexpected_hvac_action_events,
+                "unexpected_hvac_action_duartion": self.unexpected_hvac_action_duartion,
+                "zone_target_temp": self.zone_target_temp,
+                "zone_starting_temp": self.zone_starting_temp,
+                "zone_completion_temp": self.zone_completion_temp,
+                "zone_post_completion_temp_1": self.zone_post_completion_temp_1,
+                "zone_post_completion_temp_2": self.zone_post_completion_temp_2,
+                "zone_final_temp": self.zone_final_temp,
+                "zone_temp_error": self.zone_temp_error
+            },
+            indent=2,
+            default=str,
+        )
+    
+    def write_to_csv(self, file_path: str):
         """
-        Write the summary data to a CSV file. If the file is empty, write the header as well.
+        Write the ZoneEvent data to a CSV file. If the file is empty, write the headers as well.
 
         Args:
-            file_path (str): The path to the CSV file. Defaults to "summary.csv" in the current file's directory.
+            file_path (str): The path to the CSV file.
         """
-
-        # Ensure the summary exists
-        if not self.summary:
-            self.log("No summary data available to write to CSV.", level="WARNING")
-            return
-
-        # Prepare the data to write
-        data_to_write = []  # Replace with the actual data extraction logic from self.summary
-
-        # Check if the file exists
         file_exists = exists(file_path)
 
         try:
@@ -279,12 +336,10 @@ class Summary:
 
                 # Write the header if the file is empty
                 if not file_exists:
-                    header = ["Column1", "Column2", "Column3"]  # Replace with actual column names
-                    writer.writerow(header)
+                    writer.writerow(self.get_headers())
 
-                # Write the data rows
-                writer.writerows(data_to_write)
-
-            self.log(f"Summary data successfully written to {file_path}.", level="INFO")
+                # Write the data row
+                writer.writerow(self.get_values())
         except Exception as e:
-            self.log(f"Failed to write summary to CSV: {e}", level="ERROR")
+            raise RuntimeError(f"Failed to write ZoneEvent to CSV: {e}")
+              

@@ -7,7 +7,7 @@ from utils import HelperUtils
 import os
 from typing import List, Dict, Optional
 from persistent_scheduler import PersistentScheduler
-from summary import DailySummary, ZoneSummary, PersistentBase
+from summary import DailySummary, ZoneEvent
 
 
 DAILY_SCHEDULE_SOAK_RUN = time(8, 0, 0)  # figure out what time to run the soak run
@@ -267,6 +267,13 @@ class PeakEfficiency(hass.Hass):
         for handle in self.hvac_action_callback_handles:
             self.cancel_listen_state(handle)
         self.hvac_action_callback_handles.clear()
+
+        #get current temperature for all zones
+        for entity in self.climate_entities:
+            current_temp = self.get_state(entity, attribute="current_temperature")
+            self.summary.self.summary.add_delay_temperature(climate_entity=entity, current_temp=current_temp, time=datetime.now())
+
+        self.summary.write_summary_to_csv("event_log.csv")
 
         """
         Finalize the day by saving the summary and clearing the cache.
