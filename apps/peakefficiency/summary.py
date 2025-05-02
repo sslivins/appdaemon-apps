@@ -71,7 +71,7 @@ class ZoneSummary(BaseModel):
     end_time: Optional[datetime] = None
     hvac_action: Optional[str] = None
     target_temp: Optional[float] = None
-    duration: Optional[int] = None
+    duration: Optional[float] = None
     start_temp: Optional[float] = None
     outside_temp: Optional[float] = None  # taken at start
     end_temp: Optional[float] = None
