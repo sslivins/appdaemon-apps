@@ -162,7 +162,7 @@ class DailySummary(PersistentBase):
         self.forecast = forecastObj.summarize()
         self.save()
 
-    def start_zone(self, climate_entity: str, start_time: datetime = None, end_time: datetime = None, start_temp: float = None, outside_temp: float = None):
+    def start_zone(self, climate_entity: str, hvac_action: str, start_time: datetime = None, end_time: datetime = None, target_temp: float = None, start_temp: float = None, outside_temp: float = None):
         """
         Start a zone with the given start and end times.
         """
@@ -172,8 +172,8 @@ class DailySummary(PersistentBase):
             zone=climate_entity,
             start_time=datetime.now(),
             end_time=end_time,
-            target_temp=13.5 #// TODO: this should be passed in as a parameter
-            hvac_action="heating", #// TODO: this should be passed in as a parameter
+            target_temp=target_temp,
+            hvac_action=hvac_action,
             duration=run_duration,
             start_temp=start_temp,
             outside_temp=outside_temp
@@ -232,9 +232,9 @@ class DailySummary(PersistentBase):
         for zone_name, zone_summary in self.zones.items():
             event = ZoneEvent(
                 date=self.date,
-                forecast_min_temp=self.forecast.min_temp if self.forecast else None,
-                forecast_max_temp=self.forecast.max_temp if self.forecast else None,
-                forecast_avg_temp=self.forecast.avg_temp if self.forecast else None,
+                forecast_min_temp=self.forecast.min_temperature if self.forecast else None,
+                forecast_max_temp=self.forecast.max_temperature if self.forecast else None,
+                forecast_avg_temp=self.forecast.avg_temperature if self.forecast else None,
                 forecast_total_solar_radiation=self.forecast.total_solar_radiation if self.forecast else None,
                 forecast_avg_humidity=self.forecast.avg_humidity if self.forecast else None,
                 zone_name=zone_name,
@@ -279,7 +279,7 @@ class ZoneEvent(BaseModel):
     hvac_action: str
     hvac_action_duration: int
     unexpected_hvac_action_events: int
-    unexpected_hvac_action_duartion: str
+    unexpected_hvac_action_duartion: float
     zone_target_temp: float
     zone_starting_temp: float
     zone_completion_temp: float
@@ -293,13 +293,13 @@ class ZoneEvent(BaseModel):
         """
         Generate a list of headers based on the field names of the class.
         """
-        return [field for field in cls.__fields__.keys()]
+        return [field for field in cls.model_fields.keys()]
 
     def get_values(self) -> List[Any]:
         """
         Generate a list of values corresponding to the fields of the class.
         """
-        return [getattr(self, field) for field in self.__fields__.keys()]
+        return [getattr(self, field) for field in self.__class__.model_fields.keys()] 
     
     def __str__(self):
         """Provide a string representation of the ZoneEvent for printing."""

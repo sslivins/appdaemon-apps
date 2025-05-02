@@ -193,8 +193,10 @@ class PeakEfficiency(hass.Hass):
 
         self.summary.start_zone(
             climate_entity=climate_entity,
+            hvac_action="heating",
             start_time=datetime.now(),
             end_time=end_time,
+            target_temp=self.restore_temp,
             start_temp=current_temp,
             outside_temp=outside_temp
         )
@@ -275,7 +277,7 @@ class PeakEfficiency(hass.Hass):
         #get current temperature for all zones
         for entity in self.climate_entities:
             current_temp = self.get_state(entity, attribute="current_temperature")
-            self.summary.self.summary.add_delay_temperature(climate_entity=entity, current_temp=current_temp, time=datetime.now())
+            self.summary.add_delay_temperature(climate_entity=entity, temperature=current_temp, timestamp=datetime.now())
 
         self.summary.write_summary_to_csv("event_log.csv")
 
