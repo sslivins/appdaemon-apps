@@ -1,6 +1,0 @@
-date,forecast_min_temp,forecast_max_temp,forecast_avg_temp,forecast_total_solar_radiation,forecast_avg_humidity,zone_name,hvac_action,hvac_action_duration,unexpected_hvac_action_events,unexpected_hvac_action_duartion,zone_target_temp,zone_starting_temp,zone_completion_temp,zone_post_completion_temp_1,zone_post_completion_temp_2,zone_final_temp,zone_temp_error
-2025-05-01 19:24:39.425961,4.9,19.8,12.166666666666666,7404.0,47.333333333333336,climate.main_floor,heating,2400,0,0.0,13.5,14.0,14.0,15.0,14.0,14.5,0.0
-2025-05-01 19:24:39.425961,4.9,19.8,12.166666666666666,7404.0,47.333333333333336,climate.master_bedroom,heating,1800,0,0.0,13.5,14.5,14.5,14.0,14.5,15.0,0.0
-2025-05-01 19:24:39.425961,4.9,19.8,12.166666666666666,7404.0,47.333333333333336,climate.basement_master,heating,1200,0,0.0,13.5,15.0,15.0,14.5,15.0,14.0,0.0
-2025-05-01 19:24:39.425961,4.9,19.8,12.166666666666666,7404.0,47.333333333333336,climate.basement_bunk_rooms,heating,600,0,0.0,13.5,14.0,14.0,15.0,14.0,14.5,0.0
-2025-05-01 19:24:39.425961,4.9,19.8,12.166666666666666,7404.0,47.333333333333336,climate.ski_room,heating,1200,0,0.0,13.5,14.5,14.5,15.0,14.0,15.0,0.0
