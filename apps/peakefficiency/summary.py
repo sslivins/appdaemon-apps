@@ -277,7 +277,7 @@ class ZoneEvent(BaseModel):
     forecast_avg_humidity: float
     zone_name: str
     hvac_action: str
-    hvac_action_duration: int
+    hvac_action_duration: float
     unexpected_hvac_action_events: int
     unexpected_hvac_action_duartion: float
     zone_target_temp: float
