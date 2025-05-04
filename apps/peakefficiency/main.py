@@ -99,10 +99,7 @@ class PeakEfficiency(hass.Hass):
 
             self.log(f"PeakEfficiency Summary: {self.summary}", level="INFO")
 
-        else:
-            #run manually and then run the scheduler daily to figure when the best time to run override based on the weather forecast
-            self.schedule_energy_soak_run()
-
+        self.schedule_energy_soak_run()
 
         self.run_daily(self.schedule_energy_soak_run, DAILY_SCHEDULE_SOAK_RUN)
         
