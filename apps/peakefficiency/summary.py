@@ -230,6 +230,9 @@ class DailySummary(PersistentBase):
 
         #loop through each zone
         for zone_name, zone_summary in self.zones.items():
+          
+            final_temp = zone_summary.temperature_records[-1].temperature if zone_summary.temperature_records else None
+          
             event = ZoneEvent(
                 date=self.date,
                 forecast_min_temp=self.forecast.min_temperature if self.forecast else None,
@@ -247,8 +250,8 @@ class DailySummary(PersistentBase):
                 zone_completion_temp=zone_summary.end_temp,
                 zone_post_completion_temp_1=zone_summary.temperature_records[0].temperature if zone_summary.temperature_records else None,
                 zone_post_completion_temp_2=zone_summary.temperature_records[1].temperature if len(zone_summary.temperature_records) > 1 else None,
-                zone_final_temp=zone_summary.temperature_records[-1].temperature if zone_summary.temperature_records else None,
-                zone_temp_error=(zone_summary.end_temp - zone_summary.start_temp) if zone_summary.end_temp and zone_summary.start_temp else None
+                zone_final_temp=final_temp,
+                zone_temp_error=(final_temp - zone_summary.target_temp) if final_temp and zone_summary.target_temp else None
             )
 
             event.write_to_csv(file_path)
