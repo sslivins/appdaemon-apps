@@ -177,9 +177,12 @@ class PeakEfficiency(hass.Hass):
         run_duration = self._get_zone_run_duration(climate_entity)
         self.log(f"Overriding {climate_entity} to {self.heat_to_temp}C for {run_duration // 60} minutes.")
 
+        temp_modified = False
+
         do_dry_run = self._is_dry_run()
-        if not do_dry_run:
+        if not do_dry_run and run_duration > 0:
             self.call_service("climate/set_temperature", entity_id=climate_entity, temperature=self.heat_to_temp)
+            temp_modified = True
             
         self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate_entity}: Setting temperature to {self.heat_to_temp}C")         
 
@@ -198,7 +201,7 @@ class PeakEfficiency(hass.Hass):
             outside_temp=outside_temp
         )
 
-        job_id = self.job_scheduler.schedule(self.complete_zone, end_time, kwargs={"climate_entity": climate_entity})
+        job_id = self.job_scheduler.schedule(self.complete_zone, end_time, kwargs={"climate_entity": climate_entity, "run_duration": run_duration, "temp_modified": temp_modified})
         self.log(f"Scheduled job '{job_id}' to run in {run_duration} seconds for {climate_entity}.")
         
     def complete_zone(self, kwargs=None):
@@ -207,12 +210,15 @@ class PeakEfficiency(hass.Hass):
         if climate_entity is None:
             self.log("No climate entity provided, cannot complete zone.")
             return
+        
+        #indicates that the zone temperature was modified, default to True as a failsafe in case it's not present
+        temp_modified = kwargs.get("temp_modified", True)
 
         current = self.get_state(climate_entity, attribute="current_temperature")
         self.log(f"Completing zone {climate_entity} with current temperature: {current}C, restore temperature to: {self.restore_temp}C")
         
         do_dry_run = self._is_dry_run()
-        if not do_dry_run: 
+        if not do_dry_run and temp_modified:
             self.call_service("climate/set_temperature", entity_id=climate_entity, temperature=self.restore_temp)
 
         self.log(f"{'DRY RUN - ' if do_dry_run else ''}{climate_entity}: Restored temperature to {self.restore_temp}C")  
@@ -225,9 +231,10 @@ class PeakEfficiency(hass.Hass):
         self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=delay_check_temp_1), kwargs={"climate_entity": climate_entity})
         self.job_scheduler.schedule(self.delayed_get_temperature, datetime.now() + timedelta(seconds=delay_check_temp_2), kwargs={"climate_entity": climate_entity})
             
-        #get notified if this zone ever starts heating again
+
         self._wait_for_state(climate_entity, attribute="hvac_action", expected_state="idle", timeout=10)        
         
+        #get notified if this zone ever starts heating again        
         self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="idle", new="heating"))
         self.hvac_action_callback_handles.append(self.listen_state(self.zone_hvac_action, climate_entity, attribute="hvac_action", old="heating", new="idle"))
 
@@ -351,7 +358,7 @@ class PeakEfficiency(hass.Hass):
             if (datetime.now() - start_time).total_seconds() > timeout:
                 self.log(f"Timeout waiting for {entity} to change to {expected_state} got {current_state}.", level="WARNING")
                 return False
-            self.sleep(1)
+            time.sleep(1)
 
     def _get_zone_run_duration(self, entity: str) -> Optional[float]:
         """
