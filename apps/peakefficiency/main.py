@@ -1,4 +1,5 @@
 from datetime import time
+import time as systime
 import hassapi as hass
 from datetime import timedelta, datetime
 from dataclasses import dataclass, asdict, fields
@@ -358,7 +359,7 @@ class PeakEfficiency(hass.Hass):
             if (datetime.now() - start_time).total_seconds() > timeout:
                 self.log(f"Timeout waiting for {entity} to change to {expected_state} got {current_state}.", level="WARNING")
                 return False
-            time.sleep(1)
+            systime.sleep(1)
 
     def _get_zone_run_duration(self, entity: str) -> Optional[float]:
         """
