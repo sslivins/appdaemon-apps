@@ -234,25 +234,25 @@ class DailySummary(PersistentBase):
             final_temp = zone_summary.temperature_records[-1].temperature if zone_summary.temperature_records else None
           
             event = ZoneEvent(
-                date=self.date,
-                forecast_min_temp=self.forecast.min_temperature if self.forecast else None,
-                forecast_max_temp=self.forecast.max_temperature if self.forecast else None,
-                forecast_avg_temp=self.forecast.avg_temperature if self.forecast else None,
-                forecast_total_solar_radiation=self.forecast.total_solar_radiation if self.forecast else None,
-                forecast_avg_humidity=self.forecast.avg_humidity if self.forecast else None,
-                zone_name=zone_name,
-                hvac_action=zone_summary.hvac_action,
-                hvac_action_duration=zone_summary.duration,
-                unexpected_hvac_action_events=len(zone_summary.unplanned_hvac_actions),
-                unexpected_hvac_action_duartion=sum(action.duration for action in zone_summary.unplanned_hvac_actions),
-                zone_target_temp=zone_summary.target_temp,
-                zone_starting_temp=zone_summary.start_temp,
-                zone_completion_temp=zone_summary.end_temp,
-                zone_post_completion_temp_1=zone_summary.temperature_records[0].temperature if zone_summary.temperature_records else None,
-                zone_post_completion_temp_2=zone_summary.temperature_records[1].temperature if len(zone_summary.temperature_records) > 1 else None,
-                zone_final_temp=final_temp,
-                zone_temp_error=(final_temp - zone_summary.target_temp) if final_temp and zone_summary.target_temp else None
-            )
+                            date=self.date,
+                            forecast_min_temp=round(self.forecast.min_temperature, 1) if self.forecast and self.forecast.min_temperature is not None else None,
+                            forecast_max_temp=round(self.forecast.max_temperature, 1) if self.forecast and self.forecast.max_temperature is not None else None,
+                            forecast_avg_temp=round(self.forecast.avg_temperature, 1) if self.forecast and self.forecast.avg_temperature is not None else None,
+                            forecast_total_solar_radiation=round(self.forecast.total_solar_radiation, 1) if self.forecast and self.forecast.total_solar_radiation is not None else None,
+                            forecast_avg_humidity=round(self.forecast.avg_humidity, 1) if self.forecast and self.forecast.avg_humidity is not None else None,
+                            zone_name=zone_name,
+                            hvac_action=zone_summary.hvac_action,
+                            hvac_action_duration=round(zone_summary.duration, 1) if zone_summary.duration is not None else None,
+                            unexpected_hvac_action_events=len(zone_summary.unplanned_hvac_actions),
+                            unexpected_hvac_action_duartion=round(sum(action.duration for action in zone_summary.unplanned_hvac_actions), 1),
+                            zone_target_temp=round(zone_summary.target_temp, 1) if zone_summary.target_temp is not None else None,
+                            zone_starting_temp=round(zone_summary.start_temp, 1) if zone_summary.start_temp is not None else None,
+                            zone_completion_temp=round(zone_summary.end_temp, 1) if zone_summary.end_temp is not None else None,
+                            zone_post_completion_temp_1=round(zone_summary.temperature_records[0].temperature, 1) if zone_summary.temperature_records else None,
+                            zone_post_completion_temp_2=round(zone_summary.temperature_records[1].temperature, 1) if len(zone_summary.temperature_records) > 1 else None,
+                            zone_final_temp=round(final_temp, 1) if final_temp is not None else None,
+                            zone_temp_error=round((final_temp - zone_summary.target_temp), 1) if final_temp and zone_summary.target_temp else None
+                        )
 
             event.write_to_csv(file_path)
 
