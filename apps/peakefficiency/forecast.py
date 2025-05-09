@@ -114,7 +114,7 @@ class ForecastSummary:
             - The forecast data must be in ISO 8601 format for the time values.
         """
         forecast = self.forecast_data
-        block_size = math.ceil(minutes / 60 )  # round up to full hours
+        block_size = max(1, math.ceil(minutes / 60))  # round up to full hours, minimum of 1
         if len(forecast) < block_size:
             raise ValueError("Forecast data too short for the requested window")
 
