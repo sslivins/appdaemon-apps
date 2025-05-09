@@ -383,7 +383,7 @@ class PeakEfficiency(hass.Hass):
         override_entity = f"input_number.peak_efficiency_{entity_suffix}_run_override"
         if override_entity:
             override_value = self.get_state(override_entity)
-            if override_value is not None and float(override_value) > 0:
+            if override_value is not None and float(override_value) >= 0:
                 return float(override_value) * 60  # Convert minutes to seconds
             
         return DEFAULT_ZONE_RUN_DURATION
