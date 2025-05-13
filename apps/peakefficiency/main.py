@@ -284,7 +284,9 @@ class PeakEfficiency(hass.Hass):
             current_temp = self.get_state(entity, attribute="current_temperature")
             self.summary.add_delay_temperature(climate_entity=entity, temperature=current_temp, timestamp=datetime.now())
 
-        self.summary.write_summary_to_csv("event_log.csv")
+        # Create the file path for the event log CSV based on the current file's location
+        event_log_path = os.path.join(os.path.dirname(__file__), "event_log.csv")
+        self.summary.write_summary_to_csv(event_log_path)
 
         """
         Finalize the day by saving the summary and clearing the cache.
